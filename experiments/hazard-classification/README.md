@@ -4,7 +4,7 @@ The pipeline: **Gemma visual observation → GLiNER2.5 Decide → deterministic 
 
 **Results, examples, failure modes and the recommendation: [`REPORT.md`](REPORT.md).**
 
-Branch `feat/hazard-classification-experiment`. Isolated: no production file is modified, and it needs no SingleStore, Firedrill, Exa, Hono or Workflow SDK. The production Gemma-only analyzer (`src/lib/vision`) is untouched and still runs the app.
+**Wired into the workflow** on branch `feat/vision-describe-classify`: `describePhoto` → `classifyPhoto` → `finalizeHazards` (see REPORT.md, Integration). The pipeline modules live in `src/lib/vision/observe-classify/`, and this folder holds the experiment runner, scoring, tuning and probes, which need no SingleStore, Firedrill, Exa, Hono or Workflow SDK.
 
 ## Run (real model calls; needs `SIE_API_KEY` via fnox)
 

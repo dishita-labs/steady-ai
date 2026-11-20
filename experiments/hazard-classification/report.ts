@@ -1,8 +1,8 @@
 /** Render a run's summary as markdown. Numbers only; commentary goes in the README/docs. */
 
-import { CATEGORY_IDS } from "./definitions";
+import { CATEGORY_IDS } from "../../src/lib/vision/observe-classify/definitions";
 import { fmt, type ImagePrediction, type Score } from "./score";
-import type { ValidatorConfig } from "./validate";
+import type { ValidatorConfig } from "../../src/lib/vision/observe-classify/validate";
 
 interface Summary {
   run: string;

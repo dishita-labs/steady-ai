@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { FatalError, getStepMetadata, getWritable } from "workflow";
 import { createAuditEvent, type NewAuditEvent } from "../lib/audit";
 import { deriveStatus, tryAdvance, type CaseStatus, type WorkflowStage } from "../lib/case/state";
-import { dataDir } from "../lib/config";
+import { dataDir, envOr } from "../lib/config";
 import { newId, stableId } from "../lib/ids";
 import {
   chunkText,
@@ -29,6 +29,9 @@ import { classificationConcern, evaluateCandidate } from "../lib/rules/engine";
 import { deriveRequirements, ruleFor } from "../lib/rules/requirements";
 import { approve, executeApproved, getShoppingAdapter } from "../lib/shopping";
 import { getVisionAnalyzer, validateVisionResult } from "../lib/vision";
+import { classifyObservations, type ClassifyResult } from "../lib/vision/observe-classify/classify";
+import { describeImage, ObservationContractError, ObservationOutput } from "../lib/vision/observe-classify/observe";
+import { DEFAULT_VALIDATOR, traceProblems, validateClassifications } from "../lib/vision/observe-classify/validate";
 import type {
   HazardFinding,
   HomeownerCase,
@@ -202,6 +205,11 @@ export async function recordCase(input: StartCaseInput, workflowRunId: string): 
   });
 }
 
+/**
+ * Gemma-only vision (one call, Gemma labels H01–H11 directly). Not used by the workflow since the
+ * describe → classify → finalize steps below replaced it; kept so switching back is one line in
+ * steady-case.ts.
+ */
 export async function analyzePhoto(caseId: string, imageId: string): Promise<CaseState & { hazards: number }> {
   "use step";
   return guarded(caseId, "analyzePhoto", async () => {
@@ -258,6 +266,149 @@ export async function analyzePhoto(caseId: string, imageId: string): Promise<Cas
       toolCall,
     });
     const s = await syncCase(repo, caseId, "analyzePhoto", `Photo analyzed: ${hazards.length} finding(s).`);
+    return { ...s, hazards: hazards.length };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Vision: describe (Gemma) → classify (GLiNER) → finalize (deterministic rules).
+// See src/lib/vision/observe-classify/ and experiments/hazard-classification/REPORT.md.
+// Each step stores its output in the audit trail as observable facts (no model reasoning);
+// the next step reads it back from the recorder, so step returns stay small.
+// ---------------------------------------------------------------------------
+
+type ClassifiedReads = Omit<ClassifyResult, "calls">;
+
+async function loadImage(repo: CaseRepository, caseId: string, imageId: string) {
+  const c = await repo.getCase(caseId);
+  const image = (await repo.list("images", caseId)).find((i) => i.id === imageId);
+  if (!c || !image) throw new FatalError(`Image ${imageId} not found for case ${caseId}`);
+  return { c, image };
+}
+
+/** The latest audit event of this type for the image (a retried step may have written more than one). */
+async function latestVisionData<T>(repo: CaseRepository, caseId: string, imageId: string, type: "vision.described" | "vision.classified"): Promise<T> {
+  const e = (await repo.listAudit(caseId)).filter((x) => x.type === type && x.subject?.id === imageId).at(-1);
+  if (!e?.data) throw new FatalError(`No ${type} record for image ${imageId}.`);
+  return e.data as T;
+}
+
+/** Vision 1/3: Gemma 4 describes the photo neutrally: objects, parts, explicit empty lists. No hazard judgement. */
+export async function describePhoto(caseId: string, imageId: string): Promise<CaseState & { observations: number }> {
+  "use step";
+  return guarded(caseId, "describePhoto", async () => {
+    const repo = getRepository();
+    const { c, image } = await loadImage(repo, caseId, imageId);
+    const bytes = await readFile(join(dataDir(), "uploads", image.storageKey));
+    const started = Date.now();
+    try {
+      const d = await describeImage({ bytes, mimeType: image.mimeType, room: image.room });
+      await audit(repo, {
+        caseId,
+        type: "vision.described",
+        actor: { kind: "tool", id: "sie-vision" },
+        stage: c.stage,
+        subject: { kind: "image", id: imageId },
+        summary: `${d.output.observations.length} observation(s), ${d.output.observations.filter((o) => o.parts.length).length} structure(s) with parts.`,
+        data: { observations: d.output, model: d.model },
+        toolCall: { provider: "sie-vision", operation: "chat.completions", ok: true, durationMs: Date.now() - started, externalRef: d.externalRef },
+      });
+      const s = await syncCase(repo, caseId, "describePhoto", `Photo described: ${d.output.observations.length} observation(s).`);
+      return { ...s, observations: d.output.observations.length };
+    } catch (e) {
+      if (e instanceof ObservationContractError) {
+        await repo.upsert("images", { ...image, analysisStatus: "failed" });
+        await audit(repo, {
+          caseId,
+          type: "integration.error",
+          actor: { kind: "tool", id: "sie-vision" },
+          stage: c.stage,
+          subject: { kind: "image", id: imageId },
+          summary: "Photo description broke the contract; nothing was stored.",
+          data: { problem: e.message },
+          toolCall: { provider: "sie-vision", operation: "chat.completions", ok: false, durationMs: Date.now() - started },
+        });
+      }
+      throw e;
+    }
+  });
+}
+
+/** Vision 2/3: GLiNER2.5 Decide answers one positive yes/no per request about each part and item (texts batched). */
+export async function classifyPhoto(caseId: string, imageId: string): Promise<CaseState & { reads: number }> {
+  "use step";
+  return guarded(caseId, "classifyPhoto", async () => {
+    const repo = getRepository();
+    const { c } = await loadImage(repo, caseId, imageId);
+    const { observations } = await latestVisionData<{ observations: unknown }>(repo, caseId, imageId, "vision.described");
+    const obs = ObservationOutput.parse(observations);
+    const started = Date.now();
+    const { calls, ...classified } = await classifyObservations(obs, 4, "batch-texts", true);
+    await audit(repo, {
+      caseId,
+      type: "vision.classified",
+      actor: { kind: "tool", id: "sie-decide" },
+      stage: c.stage,
+      subject: { kind: "image", id: imageId },
+      summary: `${calls.length} yes/no read(s) over ${classified.parts.length} part(s).`,
+      data: { classified, model: envOr("sie-decide", "SIE_DECIDE_MODEL") },
+      toolCall: { provider: "sie-decide", operation: "extract", ok: true, durationMs: Date.now() - started },
+    });
+    const s = await syncCase(repo, caseId, "classifyPhoto", `Observations classified: ${calls.length} read(s).`);
+    return { ...s, reads: calls.length };
+  });
+}
+
+/** Vision 3/3: deterministic evidence rules turn reads into H01–H11 findings; only PRESENT reaches shopping. */
+export async function finalizeHazards(caseId: string, imageId: string): Promise<CaseState & { hazards: number }> {
+  "use step";
+  return guarded(caseId, "finalizeHazards", async () => {
+    const repo = getRepository();
+    const { c, image } = await loadImage(repo, caseId, imageId);
+    const obs = ObservationOutput.parse((await latestVisionData<{ observations: unknown }>(repo, caseId, imageId, "vision.described")).observations);
+    const { classified } = await latestVisionData<{ classified: ClassifiedReads }>(repo, caseId, imageId, "vision.classified");
+    const source = {
+      provider: "sie-vision" as const,
+      model: `describe:${envOr("sie-vision", "SIE_VISION_MODEL")} + classify:${envOr("sie-decide", "SIE_DECIDE_MODEL")}`,
+      at: new Date().toISOString(),
+    };
+    const result = validateClassifications(obs, { ...classified, calls: [] }, source, DEFAULT_VALIDATOR);
+    const problems = [...validateVisionResult(result), ...traceProblems(result, obs)];
+    if (problems.length) {
+      await repo.upsert("images", { ...image, analysisStatus: "failed" });
+      await audit(repo, {
+        caseId,
+        type: "integration.error",
+        actor: { kind: "system", id: "evidence-validator" },
+        stage: c.stage,
+        subject: { kind: "image", id: imageId },
+        summary: "Hazard findings broke the contract; nothing was stored.",
+        data: { problems },
+      });
+      throw new FatalError(`Hazard findings invalid: ${problems.join(" ")}`);
+    }
+
+    const hazards: HazardFinding[] = result.findings.map((f, i) => ({ ...f, id: stableId("haz", imageId, f.category, i), caseId, imageId, source }));
+    for (const h of hazards) await repo.upsert("hazards", h);
+    await repo.upsert("images", { ...image, analysisStatus: "analyzed" });
+    await audit(repo, {
+      caseId,
+      type: "vision.analyzed",
+      actor: { kind: "system", id: "evidence-validator" },
+      stage: c.stage,
+      subject: { kind: "image", id: imageId },
+      summary: `${hazards.filter((h) => h.label === "present").length} present, ${hazards.filter((h) => h.label === "cannot_determine").length} cannot-determine.`,
+      data: {
+        strategy: "describe-classify",
+        validator: DEFAULT_VALIDATOR,
+        categoryLabels: result.categoryLabels,
+        uncertainties: result.uncertainties,
+        hazardIds: hazards.map((h) => h.id),
+        // Which observation parts decided each label, and why: the decision trail.
+        trace: result.trace,
+      },
+    });
+    const s = await syncCase(repo, caseId, "finalizeHazards", `Photo analyzed: ${hazards.length} finding(s).`);
     return { ...s, hazards: hazards.length };
   });
 }

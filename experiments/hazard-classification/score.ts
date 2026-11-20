@@ -6,7 +6,7 @@
  */
 
 import type { CategoryLabel, HazardCategoryId } from "../../src/types/domain";
-import { CATEGORY_IDS } from "./definitions";
+import { CATEGORY_IDS } from "../../src/lib/vision/observe-classify/definitions";
 
 export type Pred = CategoryLabel | "invalid";
 

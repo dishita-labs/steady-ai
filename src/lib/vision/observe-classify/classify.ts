@@ -18,9 +18,9 @@
  * Uses the production Decide adapter (`getProductDecider`, src/lib/product-decisions) unchanged.
  */
 
-import { envOr } from "../../src/lib/config";
-import { getProductDecider, toTypedAnswer, type DecideQuestion } from "../../src/lib/product-decisions";
-import { getSieClient } from "../../src/lib/sie";
+import { envOr } from "../../config";
+import { getProductDecider, toTypedAnswer, type DecideQuestion } from "../../product-decisions";
+import { getSieClient } from "../../sie";
 import { ITEM_TYPES, PART_ROLES, type ItemType, type PartRole } from "./definitions";
 import type { ObservationOutput } from "./observe";
 
@@ -126,7 +126,12 @@ export type GlinerMode = "single" | "batch-texts" | "batch-questions";
 export const BATCH_TEXTS = 32;
 export const BATCH_QUESTIONS = 12;
 
-export async function classifyObservations(obs: ObservationOutput, concurrency = 4, mode: GlinerMode = "batch-texts"): Promise<ClassifyResult> {
+/**
+ * `strict` (the workflow): the first failed request is rethrown as-is, so the step retries
+ * transient errors and fails visibly on permanent ones. Not strict (the experiment): failures
+ * become null reads, which the validator treats as unknown.
+ */
+export async function classifyObservations(obs: ObservationOutput, concurrency = 4, mode: GlinerMode = "batch-texts", strict = false): Promise<ClassifyResult> {
   const decider = getProductDecider();
   const ask = async (text: string, question: string): Promise<ClassifyCall> => {
     try {
@@ -134,6 +139,7 @@ export async function classifyObservations(obs: ObservationOutput, concurrency =
       const p = res.answers[0]?.probabilities.yes;
       return { text, question, ok: typeof p === "number", pYes: typeof p === "number" ? p : null, error: typeof p === "number" ? undefined : "no probability in reply" };
     } catch (e) {
+      if (strict) throw e;
       return { text, question, ok: false, pYes: null, error: e instanceof Error ? e.message : String(e) };
     }
   };
@@ -210,6 +216,7 @@ export async function classifyObservations(obs: ObservationOutput, concurrency =
         }
         pairs.forEach((p, i) => reads.set(key(p.text, p.question), { ...p, ok: ps[i] !== null, pYes: ps[i], error: ps[i] === null ? "no probability in reply" : undefined }));
       } catch (e) {
+        if (strict) throw e;
         const error = e instanceof Error ? e.message : String(e);
         for (const p of pairs) reads.set(key(p.text, p.question), { ...p, ok: false, pYes: null, error });
       }

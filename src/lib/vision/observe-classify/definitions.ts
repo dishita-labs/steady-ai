@@ -9,7 +9,7 @@
  * absence comes from Gemma's explicit empty `items` lists and the rules in validate.ts.
  */
 
-import { HAZARD_CATEGORIES, type HazardCategoryId, type Severity } from "../../src/types/domain";
+import { HAZARD_CATEGORIES, type HazardCategoryId, type Severity } from "../../../types/domain";
 
 export interface CategorySpec {
   id: HazardCategoryId;
@@ -136,6 +136,24 @@ export const CATEGORY_SPECS: Record<HazardCategoryId, CategorySpec> = {
 };
 
 export const CATEGORY_IDS = Object.keys(CATEGORY_SPECS) as HazardCategoryId[];
+
+/**
+ * Plain-language finding text shown to the family (src/ui/view.ts renders `summary`, prefixed with
+ * "I can't tell from the photo: " for cannot_determine). Wording follows the taxonomy's `visible`.
+ */
+export const FINDING_TEXT: Record<HazardCategoryId, string> = {
+  H01: "Objects resting on the stairs",
+  H02: "Stairs with no handrail on at least one side",
+  H03: "Broken, uneven or damaged steps",
+  H04: "Whether the stairs have a light and switch at the top and bottom",
+  H05: "Loose objects on the floor",
+  H06: "A throw rug or mat on the floor",
+  H07: "Cords or wires on the floor",
+  H08: "Furniture in a walking path",
+  H09: "No grab bar by the tub, shower or toilet",
+  H10: "No non-slip mat or strips in the tub or shower",
+  H11: "No lamp within reach of the bed",
+};
 
 
 /** What a structure part is. GLiNER `choice` over `<feature>: <part>`. */

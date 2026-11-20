@@ -104,15 +104,29 @@ The evidence is 10 tuned-on images. Gemma's omissions cap recall, and latency is
 1. **Held-out check (once, no tuning):** run this pipeline and the production analyzer on the 30 evaluation images with the same scorer. A small runner change (allowing the evaluation manifest behind an explicit flag) is needed, and should be reviewed by someone other than the person tuning.
 2. **Biggest lever if adopted:** Gemma's omissions. Try a second, structure-only Gemma pass ("list every side and what is on it") for images where a structure was found.
 
-## Integration for Nathan (only if adopted; nothing changed in production now)
+## Integration (done on branch `feat/vision-describe-classify`)
 
-The pipeline returns the production `VisionAnalysisResult` shape, and passes `validateVisionResult` and `deriveRequirements` unchanged. So integration is one optional branch in `getVisionAnalyzer()`:
+The workflow now runs vision as three steps, replacing `analyzePhoto` in `src/workflows/steady-case.ts`:
 
-1. **`src/lib/vision/index.ts`:** add `SIE_VISION_STRATEGY=observe-classify` (default stays `gemma-only`). When it's set, call `observe()` → `classifyObservations()` → `validateClassifications(…, DEFAULT_VALIDATOR)` from `experiments/hazard-classification/` (move those files to `src/lib/vision/observe-classify/`), and return the result without the `trace` and `roles` fields, or store `trace` as audit data.
-2. **`src/lib/config.ts`:** document `SIE_VISION_STRATEGY` under `sie-vision.optional`.
-3. **`src/workflows/steps.ts` (`analyzePhoto`):**
-   - allow for ~10–20 s per image (one Gemma call plus ~20 batched GLiNER requests);
-   - audit the GLiNER call count in `toolCall`;
-   - consider recording `trace` (observation and part citations) in the `vision.analyzed` audit `data`. It holds observable facts only, no model reasoning.
-4. **Severity:** this pipeline sets a fixed per-category placeholder (`definitions.ts`). Decide whether shopping or the UI uses severity before switching.
-5. **No changes needed** to rules, shopping, the recorder or the UI.
+| Step | What | Writes |
+|---|---|---|
+| `describePhoto` | Gemma 4: neutral observations with part lists (`src/lib/vision/observe-classify/observe.ts`) | `vision.described` audit event with the observations |
+| `classifyPhoto` | GLiNER2.5 Decide: one positive yes/no per request, texts batched (`classify.ts`, strict: SDK errors retry or fail the step) | `vision.classified` audit event with every P(yes) read |
+| `finalizeHazards` | Deterministic rules (`validate.ts`), `validateVisionResult` + `traceProblems`, then hazards and the image status | hazards, `vision.analyzed` with the label trace (observation and part citations) |
+
+**How it's wired:**
+- **Data between steps:** each step reads its inputs back from the recorder (the audit trail), and step returns stay small, following the convention in `steps.ts`.
+- **Errors:** contract breaks are `FatalError`s, as in `analyzePhoto`.
+- **User-facing text:** finding summaries are plain sentences (`FINDING_TEXT`), and locations are "feature, part". Observation IDs stay in `visibleEvidence` and the trace.
+- **Switching back:** the Gemma-only `analyzePhoto` step is still in `steps.ts`, so switching back is one line in `steady-case.ts`.
+
+**Verified on 2026-11-20 against the real app** (dev server, D03 uploaded through `POST /cases`, JSONL recorder):
+- `describePhoto` took 8.5 s and `classifyPhoto` 1.7 s (116 reads).
+- `finalizeHazards` stored H09 and H10 `present`, matching ground truth.
+- The rules created grab bar and non-slip mat requirements.
+- The run then stopped visibly at `researchProducts`, because there is no `EXA_API_KEY` on that machine.
+
+**Still open:**
+1. **Severity is a placeholder** per category (`definitions.ts`). It's stored in the SingleStore `severity` column; the UI doesn't show it.
+2. **The family's `notes` are not sent to Gemma,** to keep the description neutral. They still reach the context questions and the rules as before.
+3. **The held-out check** under "Next" is still the evidence for keeping this as the default.

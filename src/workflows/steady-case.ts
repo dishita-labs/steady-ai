@@ -10,14 +10,16 @@
 import { getWorkflowMetadata } from "workflow";
 import { approvalHook, approvalToken, contextHook, contextToken } from "./hooks";
 import {
-  analyzePhoto,
   announceWaiting,
   applyContextAnswers,
+  classifyPhoto,
   closeProgress,
   concludeCase,
   decideProduct,
   defineRequirements,
+  describePhoto,
   evaluateProducts,
+  finalizeHazards,
   preparePurchase,
   recordApprovalDecision,
   recordCase,
@@ -38,7 +40,10 @@ export async function steadyCase(input: StartCaseInput): Promise<CaseRunResult> 
   const { caseId } = input;
   const { workflowRunId } = getWorkflowMetadata();
   await recordCase(input, workflowRunId);
-  await analyzePhoto(caseId, input.image.id);
+  // Vision: Gemma describes, GLiNER classifies, deterministic rules finalize (src/lib/vision/observe-classify).
+  await describePhoto(caseId, input.image.id);
+  await classifyPhoto(caseId, input.image.id);
+  await finalizeHazards(caseId, input.image.id);
 
   // Requirements, then wait for the family to answer any open context questions.
   let req = await defineRequirements(caseId);

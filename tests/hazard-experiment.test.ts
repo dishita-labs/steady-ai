@@ -5,13 +5,13 @@
 
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { ASKED_ITEM_TYPES, ASKED_ROLES, itemQuestion, roleQuestion, type ClassifyResult, type PartRead } from "../experiments/hazard-classification/classify";
+import { ASKED_ITEM_TYPES, ASKED_ROLES, itemQuestion, roleQuestion, type ClassifyResult, type PartRead } from "../src/lib/vision/observe-classify/classify";
 import { loadDevelopmentSet, parseDevManifest, steadyPrepDir } from "../experiments/hazard-classification/dataset";
-import { CATEGORY_IDS, CATEGORY_SPECS, type ItemType, type PartRole } from "../experiments/hazard-classification/definitions";
-import { ObservationOutput, observationPrompt } from "../experiments/hazard-classification/observe";
+import { CATEGORY_IDS, CATEGORY_SPECS, type ItemType, type PartRole } from "../src/lib/vision/observe-classify/definitions";
+import { ObservationOutput, observationPrompt } from "../src/lib/vision/observe-classify/observe";
 import { score, type ImagePrediction } from "../experiments/hazard-classification/score";
 import { sweep } from "../experiments/hazard-classification/tune";
-import { DEFAULT_VALIDATOR, traceProblems, validateClassifications } from "../experiments/hazard-classification/validate";
+import { DEFAULT_VALIDATOR, traceProblems, validateClassifications } from "../src/lib/vision/observe-classify/validate";
 import { deriveRequirements } from "../src/lib/rules/requirements";
 import { validateVisionResult } from "../src/lib/vision";
 import type { CategoryLabel, HazardCategoryId, HazardFinding } from "../src/types/domain";

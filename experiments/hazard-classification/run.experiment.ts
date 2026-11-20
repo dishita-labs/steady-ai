@@ -19,14 +19,14 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import { missingEnv } from "../../src/lib/config";
 import { validateVisionResult } from "../../src/lib/vision";
-import { classifyObservations, type GlinerMode } from "./classify";
+import { classifyObservations, type GlinerMode } from "../../src/lib/vision/observe-classify/classify";
 import { loadDevelopmentSet, mimeTypeFor, type DevRecord } from "./dataset";
-import { observe } from "./observe";
+import { observe } from "../../src/lib/vision/observe-classify/observe";
 import { installRecorder } from "./record";
 import { renderReport } from "./report";
 import { score } from "./score";
 import { predict, renderSweep, sweep, type StoredImage } from "./tune";
-import { DEFAULT_VALIDATOR, traceProblems } from "./validate";
+import { DEFAULT_VALIDATOR, traceProblems } from "../../src/lib/vision/observe-classify/validate";
 
 const PRIORITY = ["STD-D01", "STD-D03", "STD-D04", "STD-D07", "STD-D09"];
 /**

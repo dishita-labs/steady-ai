@@ -10,10 +10,10 @@
 import { deriveRequirements } from "../../src/lib/rules/requirements";
 import { validateVisionResult } from "../../src/lib/vision";
 import type { CategoryLabel, HazardCategoryId, HazardFinding } from "../../src/types/domain";
-import type { ClassifyResult } from "./classify";
-import type { ObservationOutput } from "./observe";
+import type { ClassifyResult } from "../../src/lib/vision/observe-classify/classify";
+import type { ObservationOutput } from "../../src/lib/vision/observe-classify/observe";
 import { fmt, score, type ImagePrediction, type Score } from "./score";
-import { DEFAULT_VALIDATOR, traceProblems, validateClassifications, type ExperimentResult, type ValidatorConfig } from "./validate";
+import { DEFAULT_VALIDATOR, traceProblems, validateClassifications, type ExperimentResult, type ValidatorConfig } from "../../src/lib/vision/observe-classify/validate";
 
 /** What a run stores per image (images/<id>.json), as far as tuning needs it. */
 export interface StoredImage {

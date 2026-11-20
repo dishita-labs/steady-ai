@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { it } from "vitest";
 import { getProductDecider, type DecideQuestion } from "../../src/lib/product-decisions";
 import { loadDevelopmentSet, mimeTypeFor } from "./dataset";
-import { observe } from "./observe";
+import { observe } from "../../src/lib/vision/observe-classify/observe";
 import { installRecorder } from "./record";
 
 const OUT = join(".data", "experiments", "hazard-classification");

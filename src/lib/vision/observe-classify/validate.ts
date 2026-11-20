@@ -20,10 +20,10 @@
  * Tunable: the P(yes) thresholds in `ValidatorConfig`.
  */
 
-import type { VisionAnalysisResult, VisionFindingDraft } from "../../src/lib/vision";
-import type { CategoryLabel, HazardCategoryId, ProviderRef } from "../../src/types/domain";
+import type { VisionAnalysisResult, VisionFindingDraft } from "..";
+import type { CategoryLabel, HazardCategoryId, ProviderRef } from "../../../types/domain";
 import { ROLE_NEEDS, type ClassifyResult, type PartRead, type PYes, type Structure } from "./classify";
-import { CATEGORY_IDS, CATEGORY_SPECS, type ItemType, type PartRole } from "./definitions";
+import { CATEGORY_IDS, CATEGORY_SPECS, FINDING_TEXT, type ItemType, type PartRole } from "./definitions";
 import type { ObservationOutput } from "./observe";
 
 export interface ValidatorConfig {
@@ -210,9 +210,10 @@ export function validateClassifications(o: ObservationOutput, cls: ClassifyResul
     findings.push({
       category: id,
       label: t.label,
-      summary: `${spec.name}: ${t.reason.replace(/_/g, " ")}.`,
+      summary: FINDING_TEXT[id],
       visibleEvidence: t.evidence.map((e) => `[${e.observationId}] ${obsById.get(e.observationId)?.feature ?? ""}, ${e.part} (${e.visibility}): ${e.items.length ? e.items.join(", ") : "nothing"}`),
-      location: t.evidence.length ? { description: [...new Set(t.evidence.map((e) => `[${e.observationId}] ${obsById.get(e.observationId)?.location ?? ""}`))].join(" ") } : undefined,
+      // Shown to the family: plain locations. Observation ids stay in visibleEvidence and the trace.
+      location: t.evidence.length ? { description: [...new Set(t.evidence.map((e) => `${obsById.get(e.observationId)?.feature ?? ""}, ${e.part}`))].join("; ") } : undefined,
       severity: spec.placeholderSeverity,
       notEstablishedFromPhoto: [spec.notVisible, ...new Set(t.evidence.flatMap((e) => obsById.get(e.observationId)?.limitations ?? []))],
       humanAssessmentRequired: t.label === "cannot_determine",

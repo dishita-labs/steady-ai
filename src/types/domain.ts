@@ -315,6 +315,8 @@ export type AuditEventType =
   | "case.stage_changed"
   | "case.status_changed"
   | "image.uploaded"
+  | "vision.described"
+  | "vision.classified"
   | "vision.analyzed"
   | "context.question_asked"
   | "context.question_answered"

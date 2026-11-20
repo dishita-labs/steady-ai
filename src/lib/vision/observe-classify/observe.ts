@@ -7,9 +7,9 @@
  */
 
 import { z } from "zod";
-import { envOr } from "../../src/lib/config";
-import { getSieClient } from "../../src/lib/sie";
-import type { RoomType } from "../../src/types/domain";
+import { envOr } from "../../config";
+import { getSieClient } from "../../sie";
+import type { RoomType } from "../../../types/domain";
 
 const ROOMS = ["bathroom", "stairs", "entrance", "bedroom", "hallway", "other_living_area", "unknown"] as const;
 const VISIBILITY = ["full", "partial", "obscured"] as const;
@@ -103,6 +103,61 @@ export function observationPrompt(room: RoomType): string {
   ].join("\n");
 }
 
+/**
+ * Gemma's reply broke the observation contract (no text, unparseable, wrong shape, duplicate ids).
+ * `fatal`: the Workflow SDK won't retry it; the same photo usually gives the same broken output.
+ */
+export class ObservationContractError extends Error {
+  readonly fatal = true;
+  constructor(
+    message: string,
+    readonly raw?: string,
+  ) {
+    super(message);
+    this.name = "ObservationContractError";
+  }
+}
+
+export interface Described {
+  output: ObservationOutput;
+  /** Raw model text. */
+  raw: string;
+  model: string;
+  /** Provider request id, when returned. */
+  externalRef?: string;
+}
+
+/**
+ * Describe the photo. Throws: transport/SDK errors as they are (retryable unless permanent), and
+ * `ObservationContractError` (fatal) when the reply breaks the contract.
+ */
+export async function describeImage(input: { bytes: Uint8Array; mimeType: string; room: RoomType }): Promise<Described> {
+  const model = envOr("sie-vision", "SIE_VISION_MODEL");
+  const dataUrl = `data:${input.mimeType};base64,${Buffer.from(input.bytes).toString("base64")}`;
+  const reply = await getSieClient().chatCompletions({
+    model,
+    messages: [
+      { role: "system", content: observationPrompt(input.room) },
+      { role: "user", content: [{ type: "image_url", image_url: { url: dataUrl } }] },
+    ],
+    temperature: 0,
+    max_completion_tokens: 4096,
+    response_format: { type: "json_schema", json_schema: { name: "visual_observations", strict: true, schema: OBSERVATION_SCHEMA } },
+  });
+  const raw = reply.choices[0]?.message.content;
+  if (typeof raw !== "string") throw new ObservationContractError("No text content in reply.");
+  let output: ObservationOutput;
+  try {
+    output = ObservationOutput.parse(JSON.parse(raw));
+  } catch (e) {
+    throw new ObservationContractError(`Observation output invalid: ${e instanceof Error ? e.message : String(e)}`, raw);
+  }
+  const ids = output.observations.map((o) => o.id);
+  if (new Set(ids).size !== ids.length) throw new ObservationContractError("Duplicate observation ids.", raw);
+  return { output, raw, model, externalRef: (reply as { id?: string }).id };
+}
+
+/** Never throws; for the experiment runner. */
 export interface ObserveResult {
   ok: boolean;
   output?: ObservationOutput;
@@ -113,28 +168,10 @@ export interface ObserveResult {
 }
 
 export async function observe(input: { bytes: Uint8Array; mimeType: string; room: RoomType }): Promise<ObserveResult> {
-  const model = envOr("sie-vision", "SIE_VISION_MODEL");
-  const dataUrl = `data:${input.mimeType};base64,${Buffer.from(input.bytes).toString("base64")}`;
-  let raw: string | undefined;
   try {
-    const reply = await getSieClient().chatCompletions({
-      model,
-      messages: [
-        { role: "system", content: observationPrompt(input.room) },
-        { role: "user", content: [{ type: "image_url", image_url: { url: dataUrl } }] },
-      ],
-      temperature: 0,
-      max_completion_tokens: 4096,
-      response_format: { type: "json_schema", json_schema: { name: "visual_observations", strict: true, schema: OBSERVATION_SCHEMA } },
-    });
-    const content = reply.choices[0]?.message.content;
-    if (typeof content !== "string") return { ok: false, error: "No text content in reply.", model };
-    raw = content;
-    const output = ObservationOutput.parse(JSON.parse(content));
-    const ids = output.observations.map((o) => o.id);
-    if (new Set(ids).size !== ids.length) return { ok: false, raw, error: "Duplicate observation ids.", model };
-    return { ok: true, output, raw, model };
+    const d = await describeImage(input);
+    return { ok: true, output: d.output, raw: d.raw, model: d.model };
   } catch (e) {
-    return { ok: false, raw, error: e instanceof Error ? e.message : String(e), model };
+    return { ok: false, raw: e instanceof ObservationContractError ? e.raw : undefined, error: e instanceof Error ? e.message : String(e), model: envOr("sie-vision", "SIE_VISION_MODEL") };
   }
 }
