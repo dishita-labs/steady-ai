@@ -77,8 +77,17 @@ That rules GLiNER out as the source of truth for absence hazards (H02, H09, H10,
 ## Latency and cost (per image)
 
 - **Gemma observation:** 2.7–17.7 s (median ≈ 9 s), 1 call.
-- **GLiNER:** 60–122 single-question calls (median ≈ 100). That's 10–22 s if the calls ran back to back; at 4 concurrent calls it's about 3–6 s wall clock (D01 live: 52 calls in 3.2 s).
-- **End to end:** roughly 10–25 s per image, against one Gemma call in production. Identical items are cached across images.
+- **GLiNER:** 60–122 single-question reads per image (median ≈ 100).
+
+**How those reads are sent matters:**
+
+| Mode | Requests (10 images) | GLiNER time | Accuracy vs single calls |
+|---|---|---|---|
+| `single`: 1 text + 1 question per request | ~1,000 | 3–6 s per image (4 concurrent) | (reference) |
+| **`batch-texts` (default):** 1 question over up to 32 texts | **300** | **≈14 s for all 10 images** | **Identical:** 939 reads, max \|ΔP\| 0.001, 0 label changes |
+| `batch-questions`: up to 12 questions about 1 text | 208 | ≈11 s for all 10 | **Worse:** p95 \|ΔP\| 0.23, max 0.53; 101 yes/no flips; 20 label changes; TP/FP 6/1 → 4/3 |
+
+Decide reads all questions in a request in one pass, and they interfere; texts in a batch don't. So questions stay one per request, and texts are batched (`extract(model, items[], …)`). End to end, an image is now dominated by the single Gemma call (≈ 9 s median).
 
 ## Recommendation
 
@@ -102,7 +111,7 @@ The pipeline returns the production `VisionAnalysisResult` shape, and passes `va
 1. **`src/lib/vision/index.ts`:** add `SIE_VISION_STRATEGY=observe-classify` (default stays `gemma-only`). When it's set, call `observe()` → `classifyObservations()` → `validateClassifications(…, DEFAULT_VALIDATOR)` from `experiments/hazard-classification/` (move those files to `src/lib/vision/observe-classify/`), and return the result without the `trace` and `roles` fields, or store `trace` as audit data.
 2. **`src/lib/config.ts`:** document `SIE_VISION_STRATEGY` under `sie-vision.optional`.
 3. **`src/workflows/steps.ts` (`analyzePhoto`):**
-   - allow for 10–25 s per call;
+   - allow for ~10–20 s per image (one Gemma call plus ~20 batched GLiNER requests);
    - audit the GLiNER call count in `toolCall`;
    - consider recording `trace` (observation and part citations) in the `vision.analyzed` audit `data`. It holds observable facts only, no model reasoning.
 4. **Severity:** this pipeline sets a fixed per-category placeholder (`definitions.ts`). Decide whether shopping or the UI uses severity before switching.

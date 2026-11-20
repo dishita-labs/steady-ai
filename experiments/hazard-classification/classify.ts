@@ -18,7 +18,9 @@
  * Uses the production Decide adapter (`getProductDecider`, src/lib/product-decisions) unchanged.
  */
 
-import { getProductDecider } from "../../src/lib/product-decisions";
+import { envOr } from "../../src/lib/config";
+import { getProductDecider, toTypedAnswer, type DecideQuestion } from "../../src/lib/product-decisions";
+import { getSieClient } from "../../src/lib/sie";
 import { ITEM_TYPES, PART_ROLES, type ItemType, type PartRole } from "./definitions";
 import type { ObservationOutput } from "./observe";
 
@@ -112,7 +114,19 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R
   return out;
 }
 
-export async function classifyObservations(obs: ObservationOutput, concurrency = 4): Promise<ClassifyResult> {
+/**
+ * How questions reach Decide. Every mode produces the same per-(text, question) P(yes) reads.
+ *   single           one text + one question per request (the reference; what v2.x used)
+ *   batch-texts      one question over many texts per request: `extract(model, items[], …)`.
+ *                    Each text still gets exactly one question, so answers don't interact.
+ *   batch-questions  many questions about one text per request (`outputSchema` with several
+ *                    entries). Answers in one request influence each other.
+ */
+export type GlinerMode = "single" | "batch-texts" | "batch-questions";
+export const BATCH_TEXTS = 32;
+export const BATCH_QUESTIONS = 12;
+
+export async function classifyObservations(obs: ObservationOutput, concurrency = 4, mode: GlinerMode = "batch-texts"): Promise<ClassifyResult> {
   const decider = getProductDecider();
   const ask = async (text: string, question: string): Promise<ClassifyCall> => {
     try {
@@ -156,10 +170,55 @@ export async function classifyObservations(obs: ObservationOutput, concurrency =
       for (const it of read.items) for (const t of ASKED_ITEM_TYPES) jobs.push({ text: it.text, question: itemQuestion(t), set: (x) => (it.types[t] = x) });
     });
   }
-  const calls = await mapLimit(jobs, concurrency, async (j) => {
-    const c = await ask(j.text, j.question);
-    j.set(c.pYes);
-    return c;
-  });
+  let calls: ClassifyCall[];
+  if (mode === "single") {
+    calls = await mapLimit(jobs, concurrency, async (j) => {
+      const c = await ask(j.text, j.question);
+      j.set(c.pYes);
+      return c;
+    });
+  } else {
+    // Unique (text, question) pairs, grouped by question (batch-texts) or by text (batch-questions).
+    const reads = new Map<string, ClassifyCall>();
+    const key = (t: string, q: string) => `${q}\u0000${t}`;
+    const groups = new Map<string, Set<string>>();
+    for (const j of jobs) {
+      const [g, m] = mode === "batch-texts" ? [j.question, j.text] : [j.text, j.question];
+      if (!groups.has(g)) groups.set(g, new Set());
+      groups.get(g)!.add(m);
+    }
+    const size = mode === "batch-texts" ? BATCH_TEXTS : BATCH_QUESTIONS;
+    const batches = [...groups].flatMap(([g, members]) => {
+      const list = [...members];
+      return Array.from({ length: Math.ceil(list.length / size) }, (_, i) => ({ g, members: list.slice(i * size, (i + 1) * size) }));
+    });
+    const model = envOr("sie-decide", "SIE_DECIDE_MODEL");
+    const client = getSieClient();
+    await mapLimit(batches, concurrency, async ({ g, members }) => {
+      const pairs = members.map((m) => (mode === "batch-texts" ? { text: m, question: g } : { text: g, question: m }));
+      try {
+        let ps: PYes[];
+        if (mode === "batch-texts") {
+          const q: DecideQuestion = { type: "noul", instructions: g };
+          const res = await client.extract(model, members.map((text) => ({ text })), { outputSchema: { q }, adapterOptions: { overflow_policy: "error" } });
+          ps = res.map((r) => toTypedAnswer("q", q, (r.data as Record<string, unknown> | undefined)?.q).probabilities.yes ?? null);
+        } else {
+          const schema = Object.fromEntries(members.map((question, i): [string, DecideQuestion] => [`q${i}`, { type: "noul", instructions: question }]));
+          const res = await client.extract(model, { text: g }, { outputSchema: schema, adapterOptions: { overflow_policy: "error" } });
+          const data = (res.data ?? {}) as Record<string, unknown>;
+          ps = members.map((_, i) => toTypedAnswer(`q${i}`, schema[`q${i}`], data[`q${i}`]).probabilities.yes ?? null);
+        }
+        pairs.forEach((p, i) => reads.set(key(p.text, p.question), { ...p, ok: ps[i] !== null, pYes: ps[i], error: ps[i] === null ? "no probability in reply" : undefined }));
+      } catch (e) {
+        const error = e instanceof Error ? e.message : String(e);
+        for (const p of pairs) reads.set(key(p.text, p.question), { ...p, ok: false, pYes: null, error });
+      }
+    });
+    calls = jobs.map((j) => {
+      const c = reads.get(key(j.text, j.question))!;
+      j.set(c.pYes);
+      return c;
+    });
+  }
   return { parts, stairCondition, wear, structures, lamps, calls };
 }

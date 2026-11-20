@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import { missingEnv } from "../../src/lib/config";
 import { validateVisionResult } from "../../src/lib/vision";
-import { classifyObservations } from "./classify";
+import { classifyObservations, type GlinerMode } from "./classify";
 import { loadDevelopmentSet, mimeTypeFor, type DevRecord } from "./dataset";
 import { observe } from "./observe";
 import { installRecorder } from "./record";
@@ -29,6 +29,12 @@ import { predict, renderSweep, sweep, type StoredImage } from "./tune";
 import { DEFAULT_VALIDATOR, traceProblems } from "./validate";
 
 const PRIORITY = ["STD-D01", "STD-D03", "STD-D04", "STD-D07", "STD-D09"];
+/**
+ * HAZARD_GLINER_MODE=single|batch-texts|batch-questions. Default batch-texts: measured 2026-11-20 on
+ * all 939 reads, identical to single calls (max |ΔP| 0.001, no label changes) with ~3x fewer
+ * requests. batch-questions shifted answers (p95 |ΔP| 0.23, 20 label changes) and scored worse.
+ */
+const GLINER_MODE = (process.env.HAZARD_GLINER_MODE ?? "batch-texts") as GlinerMode;
 const OUT = join(".data", "experiments", "hazard-classification");
 
 it.skipIf(process.env.HAZARD_EXPERIMENT !== "1")("hazard classification experiment (development images, real SIE calls)", { timeout: 60 * 60 * 1000 }, async () => {
@@ -63,7 +69,7 @@ it.skipIf(process.env.HAZARD_EXPERIMENT !== "1")("hazard classification experime
     if (o.ok && o.output) {
       const markCls = rec.count;
       const t0 = performance.now();
-      const cls = await classifyObservations(o.output);
+      const cls = await classifyObservations(o.output, 4, GLINER_MODE);
       const calls = rec.since(markCls);
       const live = calls.every((c) => !c.cached);
       tCls = live ? Math.round(performance.now() - t0) : calls.reduce((n, c) => n + c.latencyMs, 0);
@@ -97,7 +103,7 @@ it.skipIf(process.env.HAZARD_EXPERIMENT !== "1")("hazard classification experime
   }
 
   const rows = stored.map((s) => predict(s, DEFAULT_VALIDATOR).row);
-  const summary = { run, images: images.map((i) => i.imageId), validator: DEFAULT_VALIDATOR, score: score(rows), rows };
+  const summary = { run, glinerMode: GLINER_MODE, images: images.map((i) => i.imageId), validator: DEFAULT_VALIDATOR, score: score(rows), rows };
   await writeFile(join(dir, "summary.json"), JSON.stringify(summary, null, 2));
   await writeFile(join(dir, "report.md"), `${renderReport(summary)}\n## Threshold sweep (same run, no new calls)\n\n${renderSweep(sweep(stored))}\n`);
   console.log(`Results: ${dir}`);

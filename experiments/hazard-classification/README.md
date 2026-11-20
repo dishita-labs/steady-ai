@@ -11,6 +11,7 @@ Branch `feat/hazard-classification-experiment`. Isolated: no production file is 
 ```bash
 HAZARD_EXPERIMENT=1 fnox exec -- aube exec vitest run --config experiments/hazard-classification/vitest.config.mts -t "development images"
 # subset: HAZARD_IMAGES=STD-D01,STD-D03 ...   dataset elsewhere: STEADY_PREP_DIR=/path/to/steady-prep
+# GLiNER request shape: HAZARD_GLINER_MODE=batch-texts (default) | single | batch-questions. See REPORT.md, Latency.
 ```
 
 - **Expects** `steady-prep` checked out next to `steady-ai`.
