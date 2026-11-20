@@ -15,7 +15,12 @@ export interface CaseView extends CaseSnapshot {
   case: HomeownerCase;
   /** True once the run's progress stream has closed. */
   finished: boolean;
+  /** Render time (ms since epoch); defaults to now. Lets tests pin elapsed-time hints. */
+  now?: number;
 }
+
+/** After this long still analyzing the photo, say the vision model is probably starting up. */
+export const SLOW_VISION_HINT_MS = 12_000;
 
 const ROOMS: [value: string, label: string][] = [
   ["unknown", "Not sure"],
@@ -89,6 +94,9 @@ export function trail(v: CaseView | null): TrailStep[] {
     activeFound = true;
     if (c.status === "failed") return { label: d.label, state: "failed", sub: c.statusReason || "The run stopped." };
     const state = d.waiting || c.status !== "in_progress" ? "waiting" : "active";
+    const slowVision =
+      state === "active" && d.at === "PHOTO_ANALYZED" && (v.now ?? Date.now()) - Date.parse(c.createdAt) > SLOW_VISION_HINT_MS;
+    if (slowVision) return { label: d.label, state, sub: "Starting the vision model. The first photo after a quiet spell can take up to 2 minutes." };
     return { label: d.label, state, sub: d.sub };
   });
 }

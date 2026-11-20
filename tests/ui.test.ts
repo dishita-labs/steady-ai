@@ -46,5 +46,10 @@ describe("decision trail", () => {
   it("marks the stopped step failed", () => {
     const t = trail(view({ status: "failed" }));
     expect(t[0]).toMatchObject({ state: "failed" });
+  });  it("says the vision model is starting up once photo analysis runs long", () => {
+    const t0 = Date.parse(at);
+    expect(trail(view({ now: t0 + 5_000 }))[0].sub).toBeUndefined();
+    expect(trail(view({ now: t0 + 20_000 }))[0]).toMatchObject({ state: "active", sub: expect.stringContaining("Starting the vision model") });
+    expect(trail(view({ status: "failed", now: t0 + 20_000 }))[0].sub).not.toContain("Starting the vision model");
   });
 });

@@ -16,9 +16,11 @@ import { ServerSentEventGenerator } from "@starfederation/datastar-sdk/web";
 import { Hono } from "hono";
 import { HookNotFoundError } from "workflow/errors";
 import { getRun, start } from "workflow/api";
+import { stageIndex } from "./lib/case/state";
 import { INTEGRATIONS, dataDir, isConfigured, type IntegrationName } from "./lib/config";
 import { newId } from "./lib/ids";
 import { getRepository, loadSnapshot, selectRecorder, type CaseRepository } from "./lib/recorder";
+import { noteActivity, warmupStatus } from "./lib/vision/warmup";
 import { errorSlot, type CaseView, renderApp, renderPage } from "./ui/view";
 import type { RoomType, UploadedImage } from "./types/domain";
 import { approvalHook, approvalToken, contextHook, contextToken } from "./workflows/hooks";
@@ -40,6 +42,8 @@ const EXT: Record<UploadedImage["mimeType"], string> = {
   "image/heic": "heic",
 };
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
+/** While a run is quiet, the case stream still re-renders this often (elapsed-time hints like the vision cold start). */
+const QUIET_RERENDER_MS = 5_000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -60,6 +64,7 @@ app.get("/health", (c) =>
   c.json({
     ok: true,
     recorder: selectRecorder(),
+    visionWarmup: warmupStatus(),
     integrations: Object.fromEntries(
       (Object.keys(INTEGRATIONS) as IntegrationName[]).map((n) => [
         n,
@@ -69,11 +74,15 @@ app.get("/health", (c) =>
   }),
 );
 
-/** New case screen. */
-app.get("/", (c) => c.html(renderPage(renderApp(null))));
+/** New case screen. Opening it warms the vision model, so the cold start happens while a photo is being chosen. */
+app.get("/", (c) => {
+  noteActivity("upload page");
+  return c.html(renderPage(renderApp(null)));
+});
 
 /** A case's page. Its stream fills in the rest. */
 app.get("/cases/:caseId", async (c) => {
+  noteActivity("case page");
   const caseId = c.req.param("caseId");
   return c.html(renderPage(renderApp(await loadView(getRepository(), caseId, false)), `/cases/${encodeURIComponent(caseId)}/stream`));
 });
@@ -84,6 +93,7 @@ app.get("/cases/:caseId", async (c) => {
  * Answers with an SSE patch: an error message, or a script that opens the case page.
  */
 app.post("/cases", async (c) => {
+  noteActivity("new case");
   const fail = (message: string) => patches(errorSlot("form-error", message).value);
   const form = await c.req.formData();
   const photo = form.get("photo");
@@ -146,10 +156,20 @@ app.get("/cases/:caseId/stream", async (c) => {
     if (!view?.case.workflowRunId) return;
     try {
       const reader = getRun(view.case.workflowRunId).getReadable<ProgressEvent>().getReader();
+      // Re-render on every event, and also every few seconds while the run is quiet, so
+      // elapsed-time hints (e.g. the vision model starting up) appear without an event.
+      // Only before the photo is analyzed: later waits (questions, approval) have no timed hint.
+      const analyzing = () => !!view && view.case.status === "in_progress" && stageIndex(view.case.stage) < stageIndex("PHOTO_ANALYZED");
+      let next = reader.read();
       for (;;) {
-        const { done } = await reader.read();
-        if (done) break;
-        await push(false);
+        const r = await (analyzing() ? Promise.race([next, sleep(QUIET_RERENDER_MS).then(() => null)]) : next);
+        if (r === null) {
+          view = (await push(false)) ?? view;
+          continue;
+        }
+        if (r.done) break;
+        next = reader.read();
+        view = (await push(false)) ?? view;
       }
     } finally {
       await push(true);
