@@ -44,7 +44,10 @@ export interface CaseRepository {
   /** Insert or replace by `id`. */
   upsert<K extends CollectionName>(collection: K, item: CollectionItem<K>): Promise<void>;
   list<K extends CollectionName>(collection: K, caseId: CaseId): Promise<CaseCollections[K]>;
-  /** Audit is append-only. */
+  /**
+   * Audit is append-only. SingleStore and memory are idempotent by `id` (re-appending a recorded
+   * event is a no-op). JSONL still keeps duplicates: see docs/integrations/singlestore.md.
+   */
   appendAudit(e: AuditEvent): Promise<void>;
   listAudit(caseId: CaseId): Promise<AuditEvent[]>;
 }
@@ -60,6 +63,22 @@ export async function loadSnapshot(repo: CaseRepository, caseId: CaseId): Promis
     repo.list("actions", caseId),
   ]);
   return { images, hazards, questions, requirements, candidates, decisions, actions };
+}
+
+/** Everything recorded for one case: the case row, every collection and the ordered audit trail. */
+export interface CaseHistory {
+  case: HomeownerCase;
+  collections: CaseCollections;
+  audit: AuditEvent[];
+}
+
+/** Rebuild a case's full history from the recorder alone (no workflow state needed). */
+export async function loadCaseHistory(repo: CaseRepository, caseId: CaseId): Promise<CaseHistory | null> {
+  const c = await repo.getCase(caseId);
+  if (!c) return null;
+  const lists = await Promise.all(COLLECTIONS.map((name) => repo.list(name, caseId)));
+  const collections = Object.fromEntries(COLLECTIONS.map((name, i) => [name, lists[i]])) as unknown as CaseCollections;
+  return { case: c, collections, audit: await repo.listAudit(caseId) };
 }
 
 type Row = { id: string; caseId: CaseId };
@@ -105,6 +124,7 @@ export class MemoryCaseRepository implements CaseRepository {
   }
 
   async appendAudit(e: AuditEvent) {
+    if (this.audit.some((x) => x.id === e.id)) return;
     this.audit.push(structuredClone(e));
   }
 
