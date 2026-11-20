@@ -1,0 +1,10 @@
+default_provider = "keychain"
+
+[providers.keychain]
+type = "keychain"
+service = "steady-ai"
+prefix = "steady-ai"
+
+[secrets]
+SIE_API_KEY= { provider = "keychain", value = "SIE_API_KEY" }
+EXA_API_KEY= { provider = "keychain", value = "EXA_API_KEY" }
