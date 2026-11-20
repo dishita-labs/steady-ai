@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { evaluateCandidate } from "@/lib/rules/engine";
-import type { ProductCandidate, ProductClassification, ShoppingRequirement } from "@/types/domain";
+import { evaluateCandidate } from "../src/lib/rules/engine";
+import type { ProductCandidate, ProductClassification, ShoppingRequirement } from "../src/types/domain";
 
 const at = "2026-11-20T00:00:00.000Z";
 
 const requirement: ShoppingRequirement = {
   id: "req_1",
   caseId: "case_1",
+  ruleId: "R-test",
   hazardIds: ["haz_1"],
   productType: "grab_bar",
   mandatory: [
@@ -79,10 +80,10 @@ describe("rules engine", () => {
       caseId: "case_1",
       candidateId: "cand_1",
       requirementId: "req_1",
-      labels: [{ label: "not_load_bearing", score: 0.8 }],
+      answers: [{ questionId: "suitability", type: "choice", answer: "reject", probabilities: { reject: 0.8 } }],
       concern: true,
       evidenceIds: ["ev_2"],
-      source: { provider: "superlinked-sie", at },
+      source: { provider: "sie-decide", at },
     };
     const down = evaluateCandidate({ id: "dec_5", requirement, candidate: candidate(good), classifications: [concern] });
     expect(down.outcome).toBe("needs_verification");

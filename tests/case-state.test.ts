@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { checkGate, deriveStatus, tryAdvance, type CaseSnapshot } from "@/lib/agent/workflow";
-import type { ShoppingAction, ShoppingRequirement } from "@/types/domain";
+import { checkGate, deriveStatus, tryAdvance, type CaseSnapshot } from "../src/lib/case/state";
+import type { ShoppingAction, ShoppingRequirement } from "../src/types/domain";
 
 const at = "2026-11-20T00:00:00.000Z";
 const empty: CaseSnapshot = {
@@ -16,6 +16,7 @@ const empty: CaseSnapshot = {
 const req = (id: string, status: ShoppingRequirement["status"]): ShoppingRequirement => ({
   id,
   caseId: "c",
+  ruleId: "R-test",
   hazardIds: [],
   productType: "x",
   mandatory: [],

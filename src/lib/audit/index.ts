@@ -1,5 +1,5 @@
-import type { AuditEvent } from "@/types/domain";
-import { newId } from "@/lib/ids";
+import type { AuditEvent } from "../../types/domain";
+import { newId } from "../ids";
 
 /** Keys that must never be written to the audit log. */
 const FORBIDDEN_KEYS = /(api[_-]?key|secret|password|access[_-]?token|bearer|authorization|reasoning|chain[_-]?of[_-]?thought)/i;

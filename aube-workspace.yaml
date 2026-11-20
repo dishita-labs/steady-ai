@@ -1,0 +1,28 @@
+# Supply-chain trust exceptions, each reviewed on 2026-11-20 and pinned to an exact version.
+# Any other provenance downgrade still fails the install.
+#
+# @vercel/functions and @vercel/oidc (via @workflow/core) have shipped without
+# trusted-publisher provenance since 3.4.4 / 3.2.1.
+#
+# @vercel/cli-config, @vercel/cli-exec and @vercel/oidc 3.x are the same Vercel OIDC/CLI
+# chain (via @vercel/functions and @vercel/queue), used for Vercel-hosted auth only.
+#
+# @swc/core 1.15.3 is pinned exactly by @workflow/builders and @workflow/rollup. The parent
+# package has trusted-publisher provenance; its native platform binaries have had none since 1.10.0.
+trustPolicyExclude:
+  - "@vercel/functions@3.11.3"
+  - "@vercel/oidc@4.0.9"
+  - "@vercel/oidc@3.8.10"
+  - "@vercel/cli-config@0.4.0"
+  - "@vercel/cli-config@0.3.1"
+  - "@vercel/cli-exec@1.0.1"
+  - "@swc/core-darwin-x64@1.15.3"
+  - "@swc/core-darwin-arm64@1.15.3"
+  - "@swc/core-linux-x64-gnu@1.15.3"
+  - "@swc/core-linux-x64-musl@1.15.3"
+  - "@swc/core-win32-x64-msvc@1.15.3"
+  - "@swc/core-linux-arm64-gnu@1.15.3"
+  - "@swc/core-win32-ia32-msvc@1.15.3"
+  - "@swc/core-linux-arm64-musl@1.15.3"
+  - "@swc/core-win32-arm64-msvc@1.15.3"
+  - "@swc/core-linux-arm-gnueabihf@1.15.3"

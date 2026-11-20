@@ -2,4 +2,3 @@
 aube = "latest"
 fnox = "latest"
 node = "26"
-"npm:@guildai/cli" = "latest"

@@ -8,7 +8,7 @@
  * rule outcomes and actions. Hidden model reasoning is never stored.
  */
 
-import type { CaseStatus, WorkflowStage } from "@/lib/agent/workflow";
+import type { CaseStatus, WorkflowStage } from "../lib/case/state";
 
 export type Iso8601 = string;
 
@@ -27,7 +27,7 @@ export type AuditEventId = string;
 
 /** Who or what produced a piece of data. */
 export interface ProviderRef {
-  provider: "vision" | "exa" | "superlinked-sie" | "guild" | "rules-engine" | "user" | "system";
+  provider: "sie-vision" | "sie-decide" | "exa" | "rules-engine" | "shopping" | "user" | "system";
   /** Model or API identifier actually used, e.g. "fastino/GLiNER2.5-Decide". */
   model?: string;
   /** Provider-side request/session/event ID, when the provider returns one. */
@@ -65,8 +65,8 @@ export interface HomeownerCase {
   /** Human-readable reason when status is blocked, escalated or failed. */
   statusReason?: string;
   household: HouseholdContext;
-  /** Agent session this case runs in (Guild), once one exists. */
-  agentSessionId?: string;
+  /** Workflow SDK run that drives this case. */
+  workflowRunId?: string;
 }
 
 /** A piece of missing context Steady asks the user for, instead of assuming it. */
@@ -161,11 +161,18 @@ export interface RequirementConstraint {
   unit?: string;
   /** Why this constraint exists, in plain language. */
   rationale: string;
+  /**
+   * Yes/no question put to the Decide model about product text for this attribute,
+   * e.g. "Does the product say it supports at least 250 lb?". Optional.
+   */
+  decideQuestion?: string;
 }
 
 export interface ShoppingRequirement {
   id: RequirementId;
   caseId: CaseId;
+  /** The deterministic rule that produced this requirement (lib/rules/requirements.ts). */
+  ruleId: string;
   /** Hazards this requirement addresses. */
   hazardIds: HazardId[];
   /** e.g. "grab_bar", "stair_handrail", "non_slip_bath_mat", "plug_in_night_light". */
@@ -224,13 +231,29 @@ export interface ProductEvidence {
   source: ProviderRef;
 }
 
-/** Advisory output of the product classifier (Superlinked SIE / GLiNER). Never a certification. */
+/** One typed answer from the Decide model, verbatim from the SIE response. */
+export interface TypedAnswer {
+  /** Question id sent in `outputSchema`, e.g. "suitability" or a constraint id. */
+  questionId: string;
+  type: "noul" | "choice" | "score";
+  /** The answer the model picked ("yes"/"no", a choice label, or a score level). */
+  answer: string;
+  /** Probability per option, as returned. */
+  probabilities: Record<string, number>;
+  /** Set when the question probes a requirement constraint. */
+  constraintId?: ConstraintId;
+}
+
+/**
+ * Advisory output of the Decide model (Superlinked SIE, GLiNER2.5 Decide). Never a certification.
+ * Each classification covers one candidate × requirement pair over one chunk of evidence text.
+ */
 export interface ProductClassification {
   id: ClassificationId;
   caseId: CaseId;
   candidateId: CandidateId;
   requirementId: RequirementId;
-  labels: { label: string; score: number }[];
+  answers: TypedAnswer[];
   /** True when the classifier raises a concern. Can only downgrade a decision, never upgrade. */
   concern: boolean;
   evidenceIds: EvidenceId[];

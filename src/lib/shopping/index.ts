@@ -6,7 +6,7 @@
  * must label it "Simulated".
  */
 
-import type { ConstraintDecision, ShoppingAction } from "@/types/domain";
+import type { ConstraintDecision, ShoppingAction } from "../../types/domain";
 
 export interface PrepareInput {
   caseId: string;
@@ -59,4 +59,46 @@ export async function executeApproved(adapter: ShoppingAdapter, action: Shopping
     throw new ApprovalRequiredError(`action was prepared by ${action.adapter}, not ${adapter.name}`);
   }
   return adapter.execute(action);
+}
+
+/**
+ * Simulated adapter: builds a purchase request without touching any retailer.
+ * Every action it produces is labeled `simulated: true`.
+ */
+export class SimulatedShoppingAdapter implements ShoppingAdapter {
+  readonly name = "simulated";
+  readonly simulated = true;
+
+  constructor(private readonly newId: (prefix: string) => string) {}
+
+  async prepare({ caseId, decisions }: PrepareInput): Promise<ShoppingAction> {
+    assertPreparable(decisions);
+    const at = new Date().toISOString();
+    return {
+      id: this.newId("act"),
+      caseId,
+      type: "purchase_request",
+      candidateIds: [...new Set(decisions.map((d) => d.candidateId))],
+      decisionIds: decisions.map((d) => d.id),
+      status: "awaiting_approval",
+      simulated: true,
+      adapter: this.name,
+      createdAt: at,
+      updatedAt: at,
+    };
+  }
+
+  async execute(action: ShoppingAction): Promise<ShoppingAction> {
+    return {
+      ...action,
+      status: "executed",
+      externalRef: `simulated-receipt-${action.id}`,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+}
+
+export function getShoppingAdapter(mode = process.env.SHOPPING_MODE || "simulated", ids: (p: string) => string): ShoppingAdapter {
+  if (mode !== "simulated") throw new Error(`SHOPPING_MODE=${mode} has no adapter; only "simulated" exists.`);
+  return new SimulatedShoppingAdapter(ids);
 }

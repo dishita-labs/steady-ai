@@ -1,36 +1,45 @@
 # Decisions
 
-Each decision is short and dated. **Confirmed** means we've decided it. **Proposed** means it's still open. An integration is **verified** only after a real API call succeeds, and gets a dated line under "Verified integrations".
+Each decision is short and dated. **Confirmed** means we've decided it. **Open** means it's still undecided. An integration is **verified** only after a real API call succeeds, and gets a dated line under "Verified integrations".
 
 ## Confirmed (2026-11-20)
 
-1. **Stack:** Next.js 16 (App Router), TypeScript, Tailwind CSS 4, ESLint, Vitest. **Node 22**, because Vitest 5 and `@superlinked/sie-sdk` both require it.
-2. **The app owns workflow state.** Guild runs the agent and keeps session traces, but the case stage and status live in our DB. Guild session and event IDs are recorded on audit events.
-3. **The rules engine is the authority.** Classifier and LLM outputs are advisory and can only add a concern. A missing attribute is `unknown`, never a pass.
-4. **No purchase without explicit approval.** `executeApproved` is the only path, and it requires an approval record. Shopping defaults to `SHOPPING_MODE=simulated`, and the UI labels simulated actions.
-5. **Store observable things only:** findings, evidence excerpts with source URLs, tool results, rule results and actions. Never hidden model reasoning.
-6. **Use the hazard taxonomy H01–H11** from the prep work, so outputs are comparable to the held-out evaluation.
+1. **Stack:** Workflow SDK (`workflow` 5.7) + Hono, served and built by Nitro 3 (`workflow/nitro` module). TypeScript 6, ESLint (typescript-eslint), Vitest. **aube** for packages. The Next.js app is removed.
+2. **No UI yet.** We monitor runs in the Workflow SDK web UI (`aube run workflow:web`). Datastar is an SSE stub route only; the web app comes later.
+3. **Guild AI is dropped for now.** The Workflow SDK owns orchestration, durable state and the run trace. It can come back later as a boundary.
+4. **Models on Superlinked SIE:** Gemma 4 31B (`google/gemma-4-31B-it`) for vision via `chatCompletions` with a strict JSON schema, and GLiNER2.5 Decide (`fastino/GLiNER2.5-Decide`) for typed decisions via `extract` + `outputSchema`. Both model IDs are configurable through env.
+5. **Recorder chosen by env:** SingleStore when `SINGLESTORE_*` is set, otherwise local JSONL with the same row shape.
+6. **SingleStore client is `mysql2`, not `singlestore-nodejs`.** aube's supply-chain check refused `singlestore-nodejs` (505 weekly downloads, under its 1000 threshold). SingleStore speaks the MySQL wire protocol.
+7. **The rules engine is the authority.** Model outputs are advisory and can only add a concern. A missing attribute is `unknown`, never a pass.
+8. **No purchase without explicit approval.** It goes through the approval hook, then `approve`, then `executeApproved`. Shopping defaults to `SHOPPING_MODE=simulated`.
+9. **Store observable things only:** findings, evidence excerpts with source URLs, tool results, rule results and actions. Never hidden model reasoning.
+10. **Use the hazard taxonomy H01–H11** from the prep work.
+11. **Supply-chain exceptions** (`aube-workspace.yaml`), reviewed and pinned to exact versions: `@vercel/functions@3.11.3`, `@vercel/oidc@4.0.9` and `@vercel/oidc@3.8.10`, `@vercel/cli-config@0.4.0` and `@vercel/cli-config@0.3.1`, `@vercel/cli-exec@1.0.1`, and the ten `@swc/core-*@1.15.3` platform binaries. They come in through `@workflow/*` and have no trusted-publisher provenance. Every other resolved package passed `aube trust check`.
 
-## Proposed / open
+## Open
 
-| Topic | Options | Notes |
+| Topic | Question | Notes |
 |---|---|---|
-| Vision model | not chosen | Must return the `VisionAnalysisResult` contract |
-| Guild integration shape | build and publish the agent on Guild; the app calls the REST session API | `@guildai/agents-sdk` only runs inside Guild's runtime (not on public npm) |
-| SIE access | SIE Serverless vs. self-hosted | Self-hosting Decide needs an NVIDIA GPU. Not confirmed whether Serverless serves Decide |
-| SingleStore client | `singlestore-nodejs` (docs recommend it) vs. `mysql2` | Shared clusters require SSL |
-| Shopping adapter | simulated cart vs. a real retailer cart link | Real checkout is out of scope without explicit approval and a payment decision |
-| Image storage | local disk for the demo vs. object storage | Photos are private by default |
+| Typed answers → attributes | Should a Decide "yes" (with what probability, from which chunk) become an evidence-backed `ProductAttribute`, or should attributes come only from parsing page text? | Today nothing produces attributes, so every candidate is `needs_verification` and the approval path isn't reachable with real data |
+| Requirement rules | Mandatory constraints, `decideQuestion`s, and context questions per hazard | `REQUIREMENT_RULES` has three placeholder rules (H09, H10, H11) and no constraints |
+| Context answers → constraints | How an answered `field` (e.g. `wall_type`) changes a requirement's constraints | `applyContextAnswers` records answers only |
+| Decide chunking | Combine answers across 512-token chunks (any-concern? max? per-question?) | Each chunk is its own classification today |
+| Vision prompt and profile | Prompt wording, image resolution profile (`:h100-…-hires`), and max tokens | Measure on the 24 held-out eval images |
+| Self-hosted SIE | Gemma 4 (`sglang-cu130` bundle) and Decide (`transformers5`) need different images, so possibly two base URLs | One `SIE_BASE_URL` today; Serverless lists both models |
+| Price/availability | Parse from page text, or a retailer API | Not extracted; would be flagged unverified |
+| Real auth | Per-user auth for approvals | One shared `STEADY_API_TOKEN` for now |
+| Production world | Workflow SDK world for deployment (Postgres world, Vercel) | Local world (`.workflow-data`) for now |
+| Image storage | Local disk vs. object storage | `.data/uploads`, private |
 
-## Sponsor facts (from official docs, 2026-11-20; no call has been made yet)
+## Sponsor facts (from docs and installed SDK types, 2026-11-20; no call has been made yet)
 
-| Service | Package (not installed) | Auth env | Key operations | Docs |
-|---|---|---|---|---|
-| Exa | `exa-js` 2.29.0 | `EXA_API_KEY` | `search(q, { contents: { text, highlights, summary } })`, `getContents(urls, {...})`. `searchAndContents` is deprecated. There is no "product" category. | docs.exa.ai/sdks/typescript-sdk-specification |
-| Superlinked SIE | `@superlinked/sie-sdk` 0.11.1 (Node ≥ 22) | `SIE_API_KEY`, `SIE_BASE_URL` | `extract("fastino/GLiNER2.5-Decide", { text }, { labels \| outputSchema, instruction })`. 512-token limit. | superlinked.com/models/fastino-gliner2-5-decide |
-| Guild AI | `@guildai/cli` 0.32.0 | not named in docs (`GUILD_*` are ours) | REST `api.guild.ai/v1`: create session, list/post session events | docs.guild.ai |
-| SingleStore | `singlestore-nodejs` 1.0.1 | not named in docs (`SINGLESTORE_*` are ours) | `createConnection({ host, port, user, password, database })`, JSON and `VECTOR(n)` columns | docs.singlestore.com |
+| Service | Package | Auth env | Key operations |
+|---|---|---|---|
+| Superlinked SIE | `@superlinked/sie-sdk` 0.11.1 | `SIE_API_KEY`, optional `SIE_BASE_URL` | `chatCompletions({ model, messages, response_format })` (image parts as `data:` URLs); `extract(model, { text }, { outputSchema })` → `data`; `systemOne(...)` is an alternative typed-decision surface |
+| Exa | `exa-js` 2.29.0 | `EXA_API_KEY` | `search(q, { numResults, contents: { text, highlights } })`, `getContents(urls, …)` |
+| SingleStore | `mysql2` 3.24 | `SINGLESTORE_*` (ours) | `INSERT … ON DUPLICATE KEY UPDATE`; JSON columns; primary keys must include the shard key |
+| Workflow SDK | `workflow` 5.7.0 | none locally | `start`, `getRun(...).getReadable()`, `defineHook().create/resume`, `getWritable`, `FatalError` |
 
 ## Verified integrations
 
-None yet.
+None yet. A no-keys smoke test (2026-11-20) confirmed the Nitro build, API auth, workflow start, JSONL recording, the failure path (`markFailed`), the Datastar SSE stream and `workflow inspect runs`.

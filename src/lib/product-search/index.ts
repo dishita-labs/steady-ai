@@ -1,19 +1,16 @@
 /**
- * Product research boundary (Exa).
+ * Product research boundary (Exa, `exa-js`).
  *
- * Read from Exa's docs on 2026-11-20 and NOT yet exercised by a real call (`exa-js` 2.29.0, not installed yet):
- *   - auth: EXA_API_KEY
- *   - exa.search(query, { numResults, includeDomains, contents: { text, highlights, summary } })
- *     (`searchAndContents` is deprecated)
- *   - exa.getContents(urls, { text, highlights, summary })
- *   - there is no "product" search category
+ *   exa.search(query, { numResults, includeDomains, contents: { text, highlights } })
+ *   exa.getContents(urls, { text, highlights })
  *
  * Rules: keep every source URL; never fill in a price, spec or seller that isn't in retrieved content.
  * Prices and availability are stale until verified at the retailer.
  */
 
-import { notImplemented } from "@/lib/integrations";
-import type { RequirementId } from "@/types/domain";
+import Exa from "exa-js";
+import { requireConfigured } from "../config";
+import type { RequirementId } from "../../types/domain";
 
 export interface ProductSearchQuery {
   requirementId: RequirementId;
@@ -28,10 +25,10 @@ export interface RetrievedPage {
   /** Verbatim page text, when requested. */
   text?: string;
   highlights?: string[];
-  /** Provider-generated summary. Store as evidence kind "summary", never as a verbatim quote. */
-  summary?: string;
   publishedDate?: string;
   providerResultId?: string;
+  /** Exa request ID, for tracing. */
+  requestId?: string;
   retrievedAt: string;
 }
 
@@ -40,9 +37,50 @@ export interface ProductSearchProvider {
   getContents(urls: string[]): Promise<RetrievedPage[]>;
 }
 
+/** Cap on stored page text per result. Tune after looking at real product pages. */
+const MAX_TEXT_CHARS = 8000;
+const contents = { text: { maxCharacters: MAX_TEXT_CHARS }, highlights: true } as const;
+
+let exa: Exa | undefined;
+function client(): Exa {
+  requireConfigured("exa");
+  exa ??= new Exa(process.env.EXA_API_KEY);
+  return exa;
+}
+
+type ExaResult = {
+  url: string;
+  title: string | null;
+  id: string;
+  publishedDate?: string;
+  text?: string;
+  highlights?: string[];
+};
+
+function toPage(r: ExaResult, requestId: string, retrievedAt: string): RetrievedPage {
+  return {
+    url: r.url,
+    title: r.title ?? undefined,
+    text: r.text,
+    highlights: r.highlights,
+    publishedDate: r.publishedDate,
+    providerResultId: r.id,
+    requestId,
+    retrievedAt,
+  };
+}
+
 export function getProductSearchProvider(): ProductSearchProvider {
   return {
-    search: () => notImplemented("exa", "search"),
-    getContents: () => notImplemented("exa", "getContents"),
+    async search({ query, numResults = 5, includeDomains }) {
+      const res = await client().search(query, { numResults, includeDomains, contents });
+      const at = new Date().toISOString();
+      return res.results.map((r) => toPage(r, res.requestId, at));
+    },
+    async getContents(urls) {
+      const res = await client().getContents(urls, contents);
+      const at = new Date().toISOString();
+      return res.results.map((r) => toPage(r, res.requestId, at));
+    },
   };
 }

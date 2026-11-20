@@ -18,9 +18,25 @@ import type {
   RequirementConstraint,
   RuleResult,
   ShoppingRequirement,
-} from "@/types/domain";
+  TypedAnswer,
+} from "../../types/domain";
 
-export const ENGINE_VERSION = "rules-0.1.0";
+export const ENGINE_VERSION = "rules-0.2.0";
+
+/**
+ * Deterministic concern policy over Decide answers. DRAFT, to be revisited after evaluation.
+ * A concern is raised when the model picks "reject" or "needs_evidence" for suitability, or
+ * "no" on a constraint question. A concern can only downgrade eligible → needs_verification;
+ * a "yes" never counts as evidence that a constraint passes.
+ */
+export function classificationConcern(answers: TypedAnswer[]): { concern: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  for (const a of answers) {
+    if (a.questionId === "suitability" && a.answer !== "candidate") reasons.push(`suitability: ${a.answer}`);
+    if (a.constraintId && a.type === "noul" && a.answer === "no") reasons.push(`${a.constraintId}: no`);
+  }
+  return { concern: reasons.length > 0, reasons };
+}
 
 function normalize(v: ConstraintValue): ConstraintValue {
   return typeof v === "string" ? v.trim().toLowerCase() : v;

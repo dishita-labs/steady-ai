@@ -1,5 +1,8 @@
 /**
- * Explicit workflow state for a Steady case.
+ * Explicit case state for Steady: stages, statuses and gates.
+ *
+ * The Workflow SDK run drives the case; this module decides, as a pure function of the
+ * case snapshot, which stage the case is allowed to be in. Each step re-checks it.
  *
  * `stage` says how far the case has progressed. `status` says whether it can keep moving.
  * Failure, missing evidence and escalation are statuses, so a case remembers where it stopped.
@@ -16,7 +19,7 @@ import type {
   ShoppingAction,
   ShoppingRequirement,
   UploadedImage,
-} from "@/types/domain";
+} from "../../types/domain";
 
 export const WORKFLOW_STAGES = [
   "CASE_CREATED",
