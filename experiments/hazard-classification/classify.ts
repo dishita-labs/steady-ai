@@ -24,12 +24,16 @@ import type { ObservationOutput } from "./observe";
 
 /** Roles and item types GLiNER is asked about (`other` is what's left when none says yes). */
 export const ASKED_ROLES = (Object.keys(PART_ROLES) as PartRole[]).filter((r) => r !== "other");
-export const ASKED_ITEM_TYPES = (Object.keys(ITEM_TYPES) as ItemType[]).filter((t) => t !== "other" && t !== "fixture");
-/** Structure gate: a part may take a stair/bath/bed role only if its structure is one. */
+export const ASKED_ITEM_TYPES = (Object.keys(ITEM_TYPES) as ItemType[]).filter((t) => t !== "other");
+/**
+ * Structure gate: a part may take a stair/bath/bed role only if its structure is one. One concept
+ * per question (a combined "bathtub, shower or toilet?" scored 0.45 on "white alcove bathtub");
+ * the structure's score is the highest of its questions.
+ */
 export const STRUCTURE_QUESTIONS = {
-  stairs: "Is this a staircase or steps?",
-  bath: "Is this a bathtub, shower or toilet?",
-  bed: "Is this a bed?",
+  stairs: ["Is this a staircase?", "Are these steps?"],
+  bath: ["Is this a bathtub?", "Is this a shower?", "Is this a toilet?"],
+  bed: ["Is this a bed?"],
 } as const;
 export type Structure = keyof typeof STRUCTURE_QUESTIONS;
 export const ROLE_NEEDS: Partial<Record<PartRole, Structure>> = {
@@ -40,7 +44,15 @@ export const ROLE_NEEDS: Partial<Record<PartRole, Structure>> = {
   bedside: "bed",
 };
 
-export const STAIR_CONDITION_QUESTION = "Does this describe a broken, missing or uneven step, or torn or lifted carpet on stairs?";
+/** Step damage, one concept each (the combined question read "worn paint and stains" as damage, 0.70). */
+export const STAIR_CONDITION_QUESTIONS = [
+  "Does this describe a broken or missing step?",
+  "Does this describe an uneven step?",
+  "Does this describe torn or lifted carpet?",
+] as const;
+/** Lamps outside a bed's parts: is the observation a lamp, and is it placed by the bed? */
+export const LAMP_QUESTION = "Is this a lamp?";
+export const BY_BED_QUESTION = "Is this on a nightstand or next to a bed?";
 
 export const roleQuestion = (r: PartRole) => `Is this ${PART_ROLES[r]}?`;
 export const itemQuestion = (t: ItemType) => `Is this ${ITEM_TYPES[t]}?`;
@@ -73,8 +85,10 @@ export interface ClassifyCall {
 
 export interface ClassifyResult {
   parts: PartRead[];
-  /** Per observation that has parts: P(yes) that its description reports damaged steps. */
+  /** Per observation that has parts: highest P(yes) of the step-damage questions. */
   stairCondition: Record<string, PYes>;
+  /** Per observation: P(it is a lamp) and P(it sits on a nightstand / next to a bed). */
+  lamps: Record<string, { lamp: PYes; byBed: PYes }>;
   /** Per observation that has parts: P(yes) it is each structure. */
   structures: Record<string, Partial<Record<Structure, PYes>>>;
   calls: ClassifyCall[];
@@ -112,12 +126,23 @@ export async function classifyObservations(obs: ObservationOutput, concurrency =
   const parts: PartRead[] = [];
   const stairCondition: Record<string, PYes> = {};
   const structures: Record<string, Partial<Record<Structure, PYes>>> = {};
+  const lamps: Record<string, { lamp: PYes; byBed: PYes }> = {};
+  /** Keep the highest P(yes) across several single-concept questions; any failed call → null. */
+  const maxInto = (get: () => PYes | undefined, put: (p: PYes) => void) => (p: PYes) => {
+    const cur = get();
+    put(cur === null || p === null ? null : Math.max(cur ?? 0, p));
+  };
   for (const o of obs.observations) {
+    const l: { lamp: PYes; byBed: PYes } = (lamps[o.id] = { lamp: null, byBed: null });
+    jobs.push({ text: `${o.feature}: ${o.description}`, question: LAMP_QUESTION, set: (p) => (l.lamp = p) });
+    jobs.push({ text: `${o.feature}, ${o.location}`, question: BY_BED_QUESTION, set: (p) => (l.byBed = p) });
     if (!o.parts.length) continue;
     const whole = `${o.feature}: ${o.description}`;
-    jobs.push({ text: whole, question: STAIR_CONDITION_QUESTION, set: (p) => (stairCondition[o.id] = p) });
+    for (const q of STAIR_CONDITION_QUESTIONS) jobs.push({ text: whole, question: q, set: maxInto(() => stairCondition[o.id], (p) => (stairCondition[o.id] = p)) });
     const st = (structures[o.id] = {} as Partial<Record<Structure, PYes>>);
-    for (const k of Object.keys(STRUCTURE_QUESTIONS) as Structure[]) jobs.push({ text: whole, question: STRUCTURE_QUESTIONS[k], set: (p) => (st[k] = p) });
+    for (const k of Object.keys(STRUCTURE_QUESTIONS) as Structure[]) {
+      for (const q of STRUCTURE_QUESTIONS[k]) jobs.push({ text: whole, question: q, set: maxInto(() => st[k], (p) => (st[k] = p)) });
+    }
     o.parts.forEach((p, partIndex) => {
       const read: PartRead = { observationId: o.id, partIndex, part: p.part, visibility: p.visibility, roles: {}, items: p.items.map((text) => ({ text, types: {} })) };
       parts.push(read);
@@ -130,5 +155,5 @@ export async function classifyObservations(obs: ObservationOutput, concurrency =
     j.set(c.pYes);
     return c;
   });
-  return { parts, stairCondition, structures, calls };
+  return { parts, stairCondition, structures, lamps, calls };
 }

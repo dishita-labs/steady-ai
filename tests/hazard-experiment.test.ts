@@ -33,7 +33,7 @@ function scene(parts: { role: PartRole; vis?: Vis; items?: [string, ItemType | n
   const o: ObservationOutput = { roomType: "other_living_area", observations, unknowns: ["out of frame"] };
   const structOf = (r: PartRole) => (r.startsWith("stair") ? "stairs" : r.startsWith("bath") ? "bath" : r === "bedside" ? "bed" : null);
   const structures = Object.fromEntries(parts.map((p, i) => [`O${i + 1}`, { stairs: structOf(p.role) === "stairs" ? 0.9 : 0.05, bath: structOf(p.role) === "bath" ? 0.9 : 0.05, bed: structOf(p.role) === "bed" ? 0.9 : 0.05 }]));
-  const cls: ClassifyResult = { parts: reads, stairCondition: Object.fromEntries(observations.map((x) => [x.id, stairDamage ?? 0.05])), structures, calls: [] };
+  const cls: ClassifyResult = { parts: reads, stairCondition: Object.fromEntries(observations.map((x) => [x.id, stairDamage ?? 0.05])), structures, lamps: {}, calls: [] };
   return { o, cls, run: (cfg = DEFAULT_VALIDATOR) => validateClassifications(o, cls, source, cfg) };
 }
 
@@ -96,6 +96,26 @@ describe("deterministic evidence validation", () => {
     const r = s.run();
     expect(r.categoryLabels.H02).toBe("not_applicable");
     expect(r.roles[0].role).toBe("bath_wall");
+  });
+
+  it("D08-like: an empty side on a staircase that is only partly in frame defers instead of claiming a missing rail", () => {
+    const s = scene([{ role: "stair_side" }, { role: "stair_side" }]);
+    for (const x of s.o.observations) x.visibility = "partial"; // the staircase itself is cut off
+    expect(s.run().trace.H02).toMatchObject({ label: "cannot_determine", reason: "condition_only_partially_visible" });
+  });
+
+  it("D09-like: an object GLiNER can't type is still clutter on the floor, not a clear floor", () => {
+    const s = scene([{ role: "open_floor", items: [["water jug", null] as [string, ItemType | null]] }]);
+    s.cls.parts[0].items[0].types.loose_object = 0.4;
+    expect(s.run().categoryLabels.H05).toBe("present");
+    expect(scene([{ role: "open_floor", items: [["potted plant", "plant_decor"], ["rug", "rug"]] }]).run().categoryLabels.H05).toBe("absent");
+  });
+
+  it("D07-like: a lamp observed on the nightstand clears H11 even when no bedside part lists it", () => {
+    const s = scene([{ role: "bedside" }]);
+    s.o.observations.push({ id: "O9", feature: "lamp", description: "desk lamp", location: "on the nightstand", visibility: "full", limitations: [], parts: [] });
+    s.cls.lamps = { O9: { lamp: 0.9, byBed: 0.8 } };
+    expect(s.run().trace.H11).toMatchObject({ label: "absent", evidence: [{ observationId: "O9" }] });
   });
 
   it("a towel bar is not a grab bar", () => {

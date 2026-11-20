@@ -64,6 +64,22 @@ function holds(p: PartRead, type: ItemType, cfg: ValidatorConfig): Tri {
   return reads.every((r) => r === "no") ? "no" : "unknown"; // empty list → every() is true → "no"
 }
 
+/** Types that are NOT floor clutter when GLiNER is confident (cords have their own category, H07). */
+const NOT_CLUTTER: ItemType[] = ["rug", "cord", "furniture", "plant_decor", "fixture", "lamp", "handrail", "grab_bar", "towel_bar", "bath_mat"];
+
+/**
+ * Floor clutter (H05): any object on the floor counts unless GLiNER is confident it is something
+ * else (a rug, cord, furniture...). An object it can't type is still an object on the floor;
+ * treating it as "nothing" would turn missing information into absence.
+ */
+function holdsClutter(p: PartRead, cfg: ValidatorConfig): Tri {
+  const reads = p.items.map((it): Tri => {
+    if (tri(it.types.loose_object, cfg) === "yes" && (it.types.plant_decor ?? 0) <= (it.types.loose_object ?? 0)) return "yes";
+    return NOT_CLUTTER.some((t) => tri(it.types[t], cfg) === "yes") ? "no" : "yes";
+  });
+  return reads.includes("yes") ? "yes" : "no";
+}
+
 export type TraceReason =
   | "visible_condition"
   | "condition_only_partially_visible"
@@ -101,12 +117,20 @@ const full = (p: PartRead) => p.visibility === "full";
  *   hazardWhen "holds": PRESENT if a full part holds it; ABSENT if every part is full and lacks it.
  *   hazardWhen "lacks": PRESENT if a full part lacks it; ABSENT if every part is full and holds it.
  */
-function partRule(parts: PartRead[], type: ItemType, hazardWhen: "holds" | "lacks", cfg: ValidatorConfig): CategoryTrace | null {
+function partRule(
+  parts: PartRead[],
+  type: ItemType | ((p: PartRead) => Tri),
+  hazardWhen: "holds" | "lacks",
+  cfg: ValidatorConfig,
+  structureFull: (p: PartRead) => boolean = () => true,
+): CategoryTrace | null {
   if (!parts.length) return null;
-  const states = parts.map((p) => ({ p, h: holds(p, type, cfg) }));
+  const states = parts.map((p) => ({ p, h: typeof type === "function" ? type(p) : holds(p, type, cfg) }));
   const isHazard = (h: Tri) => (hazardWhen === "holds" ? h === "yes" : h === "no");
   const isClear = (h: Tri) => (hazardWhen === "holds" ? h === "no" : h === "yes");
-  const hazardFull = states.filter((s) => full(s.p) && isHazard(s.h));
+  // A SEEN item counts on a fully visible part. A claimed ABSENCE ("this side has nothing") also
+  // needs the whole structure in frame: an empty side of a cut-off staircase proves nothing.
+  const hazardFull = states.filter((s) => full(s.p) && isHazard(s.h) && (hazardWhen === "holds" || structureFull(s.p)));
   if (hazardFull.length) return { label: "present", reason: "visible_condition", evidence: hazardFull.map((s) => ref(s.p)) };
   const hazardPartial = states.filter((s) => isHazard(s.h));
   if (hazardPartial.length) return { label: "cannot_determine", reason: "condition_only_partially_visible", evidence: hazardPartial.map((s) => ref(s.p)) };
@@ -124,11 +148,13 @@ export function validateClassifications(o: ObservationOutput, cls: ClassifyResul
   const by = (r: PartRole) => parts.filter((p) => roleOf.get(p) === r);
   const sides = by("stair_side"), treads = by("stair_treads"), stairs = [...sides, ...treads];
   const walls = by("bath_wall"), bathFloors = by("bath_floor"), bedside = by("bedside"), floors = by("open_floor");
+  const obsVis = new Map(o.observations.map((x) => [x.id, x.visibility]));
+  const structureFull = (p: PartRead) => obsVis.get(p.observationId) === "full";
 
   const trace = {} as Record<HazardCategoryId, CategoryTrace>;
   trace.H01 = partRule(treads, "loose_object", "holds", cfg) ?? (sides.length ? defer(sides) : NA);
   // H02 absence also needs both sides seen: one described side with a rail doesn't clear the other.
-  const h02 = partRule(sides, "handrail", "lacks", cfg);
+  const h02 = partRule(sides, "handrail", "lacks", cfg, structureFull);
   trace.H02 = !h02 ? (treads.length ? defer(treads) : NA) : h02.label === "absent" && sides.length < 2 ? defer(sides) : h02;
   // H03: a positive "damaged steps" read on a stairs observation; absence needs full treads and a confident no.
   if (!stairs.length) trace.H03 = NA;
@@ -143,16 +169,21 @@ export function validateClassifications(o: ObservationOutput, cls: ClassifyResul
     else trace.H03 = defer(stairs);
   }
   trace.H04 = stairs.length ? defer(stairs, "absence_not_establishable_from_photo") : NA;
-  trace.H05 = partRule(floors, "loose_object", "holds", cfg) ?? NA;
+  trace.H05 = partRule(floors, (p) => holdsClutter(p, cfg), "holds", cfg) ?? NA;
   trace.H06 = partRule(floors, "rug", "holds", cfg) ?? NA;
   trace.H07 = partRule(floors, "cord", "holds", cfg) ?? NA;
   const h08 = partRule(floors, "furniture", "holds", cfg);
   trace.H08 = !h08 ? NA : h08.label === "present" ? { ...h08, label: "cannot_determine", reason: "route_obstruction_not_establishable" } : h08;
-  trace.H09 = partRule(walls, "grab_bar", "lacks", cfg) ?? (bathFloors.length ? defer(bathFloors) : NA);
-  trace.H10 = partRule(bathFloors, "bath_mat", "lacks", cfg) ?? (walls.length ? defer(walls) : NA);
-  // H11: one lamp within reach on any side clears it; otherwise every bedside part must be seen.
-  const h11 = partRule(bedside, "lamp", "lacks", cfg);
-  trace.H11 = !h11 ? NA : bedside.some((p) => holds(p, "lamp", cfg) === "yes") ? { label: "absent", reason: "visible_absence", evidence: bedside.filter((p) => holds(p, "lamp", cfg) === "yes").map(ref) } : h11;
+  trace.H09 = partRule(walls, "grab_bar", "lacks", cfg, structureFull) ?? (bathFloors.length ? defer(bathFloors) : NA);
+  trace.H10 = partRule(bathFloors, "bath_mat", "lacks", cfg, structureFull) ?? (walls.length ? defer(walls) : NA);
+  // H11: one lamp within reach clears it, whether listed on a bedside part or observed on its own
+  // "on a nightstand / next to a bed". Otherwise every bedside part (and the bed) must be seen.
+  const lampsByBed = o.observations.filter((x) => tri(cls.lamps?.[x.id]?.lamp, cfg) === "yes" && tri(cls.lamps?.[x.id]?.byBed, cfg) === "yes");
+  const h11 = partRule(bedside, "lamp", "lacks", cfg, structureFull);
+  if (!h11) trace.H11 = NA;
+  else if (bedside.some((p) => holds(p, "lamp", cfg) === "yes")) trace.H11 = { label: "absent", reason: "visible_absence", evidence: bedside.filter((p) => holds(p, "lamp", cfg) === "yes").map(ref) };
+  else if (lampsByBed.length) trace.H11 = { label: "absent", reason: "visible_absence", evidence: lampsByBed.map((x) => ({ observationId: x.id, part: "(whole observation)", visibility: x.visibility, items: [x.feature] })) };
+  else trace.H11 = h11;
 
   const findings: VisionFindingDraft[] = [];
   const obsById = new Map(o.observations.map((x) => [x.id, x]));

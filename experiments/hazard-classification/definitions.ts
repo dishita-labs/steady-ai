@@ -140,7 +140,7 @@ export const CATEGORY_IDS = Object.keys(CATEGORY_SPECS) as HazardCategoryId[];
 
 /** What a structure part is. GLiNER `choice` over `<feature>: <part>`. */
 export const PART_ROLES = {
-  stair_side: "a side of stairs or steps",
+  stair_side: "the left or right side of a staircase or steps",
   stair_treads: "the treads or surface of stairs or steps",
   bath_wall: "a wall next to or inside a bathtub, shower or toilet",
   bath_floor: "the floor inside a bathtub or shower",
