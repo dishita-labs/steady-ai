@@ -116,7 +116,7 @@ async function guarded<T>(caseId: string, step: string, body: () => Promise<T>):
     return await body();
   } catch (e) {
     const { attempt, maxAttempts } = getStepMetadata();
-    if (FatalError.is(e) || attempt >= maxAttempts) {
+    if (FatalError.is(e) || isPermanentRequestError(e) || attempt >= maxAttempts) {
       const message = e instanceof Error ? e.message : String(e);
       try {
         await recordFailure(caseId, step, message);
@@ -124,8 +124,18 @@ async function guarded<T>(caseId: string, step: string, body: () => Promise<T>):
         await getWritable<ProgressEvent>().close();
       }
     }
-    throw e;
+    throw isPermanentRequestError(e) ? new FatalError((e as Error).message) : e;
   }
+}
+
+/**
+ * A 4xx from an SDK (SIE `RequestError`, Exa, …) won't succeed on retry, except 408/429.
+ * Matched by shape, not `instanceof`, because bundling can duplicate SDK classes.
+ */
+export function isPermanentRequestError(e: unknown): boolean {
+  if (!(e instanceof Error)) return false;
+  const status = (e as { statusCode?: unknown; status?: unknown }).statusCode ?? (e as { status?: unknown }).status;
+  return typeof status === "number" && status >= 400 && status < 500 && status !== 408 && status !== 429;
 }
 
 async function recordFailure(caseId: string, step: string, message: string) {
@@ -598,4 +608,32 @@ export async function recordApprovalDecision(caseId: string, payload: ApprovalPa
 export async function closeProgress(): Promise<void> {
   "use step";
   await getWritable<ProgressEvent>().close();
+}
+
+/**
+ * End a run that stops before a purchase (no requirement rule matched, or nothing eligible).
+ * The case must not stay `in_progress` after its run ends, so it is escalated to a person
+ * with the reason, and the progress stream is closed.
+ */
+export async function concludeCase(caseId: string, outcome: "no_requirements" | "nothing_eligible", reason: string): Promise<CaseState> {
+  "use step";
+  return guarded(caseId, "concludeCase", async () => {
+    const repo = getRepository();
+    const c = await repo.getCase(caseId);
+    if (!c) throw new FatalError(`Case ${caseId} not found`);
+    if (c.status !== "escalated") {
+      await audit(repo, {
+        caseId,
+        type: "case.status_changed",
+        actor: { kind: "system", id: "workflow" },
+        stage: c.stage,
+        summary: `${c.status} → escalated (${outcome})`,
+        data: { outcome, reason },
+      });
+    }
+    await repo.updateCase(caseId, { status: "escalated", statusReason: reason });
+    await emit({ caseId, step: "concludeCase", stage: c.stage, status: "escalated", message: reason });
+    await getWritable<ProgressEvent>().close();
+    return { stage: c.stage, status: "escalated" as const };
+  });
 }

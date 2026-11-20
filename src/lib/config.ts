@@ -25,7 +25,7 @@ export const INTEGRATIONS: Record<IntegrationName, IntegrationInfo> = {
     label: "Superlinked SIE: Gemma 4 31B (VLM)",
     role: "Photo → hazard findings with visible evidence and stated uncertainty",
     required: ["SIE_API_KEY"],
-    optional: { SIE_BASE_URL: "", SIE_VISION_MODEL: "google/gemma-4-31B-it" },
+    optional: { SIE_BASE_URL: "", SIE_VISION_MODEL: "google/gemma-4-31B-it:h100-96k-hires-out8k-no-spec" },
     docs: "https://superlinked.com/models/google-gemma-4-31b-it",
     verified: false,
   },

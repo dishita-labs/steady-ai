@@ -1,8 +1,12 @@
 /**
  * Typed product decisions (Superlinked SIE, GLiNER2.5 Decide).
  *
- *   client.extract("fastino/GLiNER2.5-Decide", { text }, { outputSchema: { <id>: { type, instructions, ... } } })
- *   → result.data[<id>]: the answer and probabilities per option
+ *   client.extract("fastino/GLiNER2.5-Decide", { text }, { outputSchema: { <id>: { type, instructions, criteria? } } })
+ *   → result.data[<id>]:
+ *       noul:   { type, noul: P(yes), answer: boolean, confidence }
+ *       choice: { type, choice: label, probabilities: { label: p }, confidence }
+ *       score:  { type, score, probabilities: { "0": p, ... }, confidence }
+ *   (shapes confirmed against SIE Serverless on 2026-11-20)
  *
  * Every question in one call is read alongside the text in a single forward pass, and each
  * answer depends on the other questions sent with it. Text is limited to 512 tokens, so long
@@ -20,8 +24,10 @@ import type { ProviderRef, RequirementConstraint, TypedAnswer } from "../../type
 /** One typed question in SIE's `outputSchema` format. */
 export type DecideQuestion =
   | { type: "noul"; instructions: string }
-  | { type: "choice"; instructions: string; options: Record<string, string> }
-  | { type: "score"; instructions: string; levels: string[] };
+  /** `criteria`: label → description (or a plain list of labels). */
+  | { type: "choice"; instructions: string; criteria: Record<string, string> | string[] }
+  /** `criteria`: one description per ordinal level "0".."k-1" (at most 10). */
+  | { type: "score"; instructions: string; criteria: string[] };
 
 export interface DecideRequest {
   text: string;
@@ -44,7 +50,7 @@ export function suitabilityQuestion(productType: string): DecideQuestion {
   return {
     type: "choice",
     instructions: `Is this product page for a ${productType.replace(/_/g, " ")} that fits the stated need?`,
-    options: {
+    criteria: {
       candidate: "The page describes a matching product.",
       reject: "The page is for a different kind of product, or not a product page.",
       needs_evidence: "The page doesn't give enough detail to tell.",
@@ -78,21 +84,26 @@ export function chunkText(text: string, maxChars = 1400): string[] {
   return chunks;
 }
 
-/** Normalize one entry of `result.data` into a TypedAnswer. Shape seen in SDK docs; verify against real output. */
+/** Normalize one entry of `result.data` into a TypedAnswer (shapes in the header comment). */
 export function toTypedAnswer(questionId: string, q: DecideQuestion, raw: unknown): TypedAnswer {
   const r = (raw ?? {}) as Record<string, unknown>;
+  if (q.type === "noul") {
+    const pYes = typeof r.noul === "number" ? r.noul : undefined;
+    const answer = r.answer === true ? "yes" : r.answer === false ? "no" : pYes === undefined ? "unknown" : pYes >= 0.5 ? "yes" : "no";
+    return { questionId, type: "noul", answer, probabilities: pYes === undefined ? {} : { yes: pYes, no: 1 - pYes } };
+  }
   const probabilities =
     r.probabilities && typeof r.probabilities === "object" ? (r.probabilities as Record<string, number>) : {};
-  let answer: unknown = r.answer ?? r.choice ?? r.score ?? r.noul;
-  if (q.type === "noul" && typeof answer === "number") answer = answer >= 0.5 ? "yes" : "no";
-  return { questionId, type: q.type, answer: String(answer ?? "unknown"), probabilities };
+  const answer = q.type === "choice" ? r.choice : r.score;
+  return { questionId, type: q.type, answer: answer === undefined || answer === null ? "unknown" : String(answer), probabilities };
 }
 
 export function getProductDecider(): ProductDecider {
   return {
     async decide({ text, questions }) {
       const model = envOr("sie-decide", "SIE_DECIDE_MODEL");
-      const res = await getSieClient().extract(model, { text }, { outputSchema: questions });
+      // overflow_policy "error": text over the 512-token window fails instead of being silently cut.
+      const res = await getSieClient().extract(model, { text }, { outputSchema: questions, adapterOptions: { overflow_policy: "error" } });
       const data = (res.data ?? {}) as Record<string, unknown>;
       return {
         answers: Object.entries(questions).map(([id, q]) => ({

@@ -196,12 +196,18 @@ describe("Decide boundary helpers", () => {
     expect(chunks.join(" ")).toBe(text);
   });
 
-  it("normalizes a raw answer, keeping the probabilities", () => {
-    const a = toTypedAnswer("suitability", { type: "choice", instructions: "", options: {} }, {
+  it("normalizes real SIE answer shapes, keeping the probabilities", () => {
+    const a = toTypedAnswer("suitability", { type: "choice", instructions: "", criteria: {} }, {
+      type: "choice",
       choice: "reject",
       probabilities: { candidate: 0.1, reject: 0.9 },
+      confidence: 0.8,
     });
     expect(a).toMatchObject({ answer: "reject", probabilities: { reject: 0.9 } });
+    const yes = toTypedAnswer("c1", { type: "noul", instructions: "" }, { type: "noul", noul: 0.99, answer: true, confidence: 0.99 });
+    expect(yes).toMatchObject({ answer: "yes", probabilities: { yes: 0.99 } });
+    const no = toTypedAnswer("c1", { type: "noul", instructions: "" }, { type: "noul", noul: 0.1, answer: false });
+    expect(no.answer).toBe("no");
   });
 
   it("concern policy: reject or 'no' raises a concern; 'yes' never counts as a pass", () => {

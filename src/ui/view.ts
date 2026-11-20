@@ -41,6 +41,7 @@ function pill(v: CaseView | null): Safe {
     else if (v.actions.some((a) => a.status === "awaiting_approval")) [label, tone] = ["Needs your approval", "warn"];
     else if (v.questions.some((q) => q.status === "open")) [label, tone] = ["Needs your input", "warn"];
     else if (c.stage === "ACTION_COMPLETED" || c.status === "completed") [label, tone] = ["Case complete", "ok"];
+    else if (c.status === "escalated") [label, tone] = ["Needs a person to review", "warn"];
     else if (c.status !== "in_progress") [label, tone] = ["Case paused", "warn"];
   }
   return html`<span id="pill" class="pill" data-tone="${tone}">${label}</span>`;

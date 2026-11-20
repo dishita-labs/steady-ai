@@ -14,6 +14,7 @@ import {
   announceWaiting,
   applyContextAnswers,
   closeProgress,
+  concludeCase,
   decideProduct,
   defineRequirements,
   evaluateProducts,
@@ -54,8 +55,8 @@ export async function steadyCase(input: StartCaseInput): Promise<CaseRunResult> 
     ready = req.requirementIds;
   }
   if (ready.length === 0) {
-    await closeProgress();
-    return { caseId, stage: req.stage, status: req.status, outcome: "no_requirements" };
+    const ended = await concludeCase(caseId, "no_requirements", "No shopping requirement could be made from the findings; a person should review them.");
+    return { caseId, ...ended, outcome: "no_requirements" };
   }
 
   // Research every ready requirement in parallel, then ask Decide about each candidate.
@@ -67,8 +68,12 @@ export async function steadyCase(input: StartCaseInput): Promise<CaseRunResult> 
   const evaluated = await evaluateProducts(caseId);
   const prepared = await preparePurchase(caseId);
   if (!prepared) {
-    await closeProgress();
-    return { caseId, stage: evaluated.stage, status: evaluated.status, outcome: "nothing_eligible" };
+    const ended = await concludeCase(
+      caseId,
+      "nothing_eligible",
+      `No product passed every check (${evaluated.needsVerification} need verification, ${evaluated.rejected} rejected); a person should review them.`,
+    );
+    return { caseId, ...ended, outcome: "nothing_eligible" };
   }
 
   // Nothing is bought without this explicit approval.
