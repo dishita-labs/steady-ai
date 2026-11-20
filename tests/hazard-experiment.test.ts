@@ -10,7 +10,8 @@ import { parseDevManifest, loadDevelopmentSet, steadyPrepDir } from "../experime
 import { CATEGORY_IDS, CATEGORY_SPECS, QUESTION_GROUPS } from "../experiments/hazard-classification/definitions";
 import { ObservationOutput, observationPrompt, type Observation } from "../experiments/hazard-classification/observe";
 import { score, type ImagePrediction } from "../experiments/hazard-classification/score";
-import { traceProblems, validateClassifications } from "../experiments/hazard-classification/validate";
+import { sweep } from "../experiments/hazard-classification/tune";
+import { DEFAULT_VALIDATOR, traceProblems, validateClassifications } from "../experiments/hazard-classification/validate";
 import { deriveRequirements } from "../src/lib/rules/requirements";
 import { validateVisionResult } from "../src/lib/vision";
 import type { CategoryLabel, HazardCategoryId, HazardFinding } from "../src/types/domain";
@@ -128,6 +129,42 @@ describe("deterministic evidence validation", () => {
     const o = out(obs("O1", "full"));
     const r = validateClassifications(o, answers(o, [["O1", "H10", "hazard"]]), source);
     expect(r.findings[0].notEstablishedFromPhoto[0]).toBe(CATEGORY_SPECS.H10.notVisible);
+  });
+});
+
+describe("tuning thresholds", () => {
+  const o = out(obs("O1", "full", "bathtub"), obs("O2", "full", "floor"));
+  const reads = (pHazard: number, pClear: number): ObservationCategoryAnswer[] =>
+    answers(o, []).map((a) =>
+      a.observationId === "O1" && a.category === "H09" ? { ...a, label: "hazard", probabilities: { hazard: pHazard } }
+      : a.observationId === "O2" && a.category === "H05" ? { ...a, label: "no_hazard", probabilities: { no_hazard: pClear } }
+      : a,
+    );
+
+  it("default thresholds keep GLiNER's top choice", () => {
+    const r = validateClassifications(o, reads(0.4, 0.4), source);
+    expect([r.categoryLabels.H09, r.categoryLabels.H05]).toEqual(["present", "absent"]);
+  });
+  it("a weak hazard or no_hazard read becomes unclear (cannot_determine), never present or absent", () => {
+    const cfg = { minHazardProbability: 0.7, minClearProbability: 0.7 };
+    const weak = validateClassifications(o, reads(0.55, 0.55), source, cfg);
+    expect([weak.categoryLabels.H09, weak.categoryLabels.H05]).toEqual(["cannot_determine", "cannot_determine"]);
+    const strong = validateClassifications(o, reads(0.9, 0.9), source, cfg);
+    expect([strong.categoryLabels.H09, strong.categoryLabels.H05]).toEqual(["present", "absent"]);
+  });
+  it("sweeps stored runs without model calls and keeps invalid images invalid", () => {
+    const gt = { ...Object.fromEntries(CATEGORY_IDS.map((c) => [c, "not_applicable"])), H09: "present", H05: "absent" } as Record<HazardCategoryId, CategoryLabel>;
+    const results = sweep(
+      [
+        { imageId: "D1", gt, observations: o, answers: reads(0.65, 0.9), latencyMs: 1 },
+        { imageId: "D2", gt, latencyMs: 1 }, // observe failed: no observations stored
+      ],
+      [DEFAULT_VALIDATOR, { minHazardProbability: 0.7, minClearProbability: 0 }],
+    );
+    expect(results.map((r) => [r.score.tp, r.score.deferred, r.score.invalidImages])).toEqual([
+      [1, 0, ["D2"]],
+      [0, 1, ["D2"]],
+    ]);
   });
 });
 

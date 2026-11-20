@@ -49,6 +49,26 @@ export interface ExperimentResult extends VisionAnalysisResult {
   downgradedHazardReads: number;
 }
 
+/**
+ * Tuning knobs. Only confidence thresholds are tunable; the evidence rules above are fixed
+ * (PRESENT always needs a fully visible observation, H04 is never ABSENT, and so on).
+ */
+export interface ValidatorConfig {
+  /** A `hazard` read counts only when GLiNER's P(hazard) ≥ this; weaker reads become `unclear`. */
+  minHazardProbability: number;
+  /** A `no_hazard` read counts only when P(no_hazard) ≥ this; weaker reads become `unclear`. */
+  minClearProbability: number;
+}
+export const DEFAULT_VALIDATOR: ValidatorConfig = { minHazardProbability: 0, minClearProbability: 0 };
+
+/** Apply the thresholds: a weak hazard/no_hazard read is treated as `unclear`. */
+export function applyThresholds(a: ObservationCategoryAnswer, cfg: ValidatorConfig): ObservationCategoryAnswer {
+  const p = a.probabilities[a.label] ?? 0;
+  if (a.label === "hazard" && p < cfg.minHazardProbability) return { ...a, label: "unclear" };
+  if (a.label === "no_hazard" && p < cfg.minClearProbability) return { ...a, label: "unclear" };
+  return a;
+}
+
 function decide(id: HazardCategoryId, answers: ObservationCategoryAnswer[], obs: Map<string, Observation>): CategoryTrace {
   const mine = answers.filter((a) => a.category === id && obs.has(a.observationId));
   const reads = Object.fromEntries(mine.map((a) => [a.observationId, a.label]));
@@ -73,7 +93,13 @@ function decide(id: HazardCategoryId, answers: ObservationCategoryAnswer[], obs:
   return { label: "not_applicable", reason: "area_not_in_photo", observationIds: [], reads };
 }
 
-export function validateClassifications(o: ObservationOutput, answers: ObservationCategoryAnswer[], source: ProviderRef): ExperimentResult {
+export function validateClassifications(
+  o: ObservationOutput,
+  rawAnswers: ObservationCategoryAnswer[],
+  source: ProviderRef,
+  cfg: ValidatorConfig = DEFAULT_VALIDATOR,
+): ExperimentResult {
+  const answers = rawAnswers.map((a) => applyThresholds(a, cfg));
   const obs = new Map(o.observations.map((x) => [x.id, x]));
   const trace = Object.fromEntries(CATEGORY_IDS.map((id) => [id, decide(id, answers, obs)])) as Record<HazardCategoryId, CategoryTrace>;
 

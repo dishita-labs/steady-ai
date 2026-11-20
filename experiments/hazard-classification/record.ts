@@ -3,8 +3,7 @@
  * never repeats a model call it already paid for.
  *
  * It wraps the two methods on the shared client instance (`getSieClient()`), in this process
- * only. Production code (src/lib/sie.ts, src/lib/vision, src/lib/product-decisions) is used
- * unchanged, so the baseline is exactly the production call path.
+ * only. Production code (src/lib/sie.ts, src/lib/product-decisions) is used unchanged.
  * A cached call reports the latency measured when it really ran, and is marked `cached`.
  */
 
