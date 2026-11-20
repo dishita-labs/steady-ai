@@ -33,7 +33,7 @@ function scene(parts: { role: PartRole; vis?: Vis; items?: [string, ItemType | n
   const o: ObservationOutput = { roomType: "other_living_area", observations, unknowns: ["out of frame"] };
   const structOf = (r: PartRole) => (r.startsWith("stair") ? "stairs" : r.startsWith("bath") ? "bath" : r === "bedside" ? "bed" : null);
   const structures = Object.fromEntries(parts.map((p, i) => [`O${i + 1}`, { stairs: structOf(p.role) === "stairs" ? 0.9 : 0.05, bath: structOf(p.role) === "bath" ? 0.9 : 0.05, bed: structOf(p.role) === "bed" ? 0.9 : 0.05 }]));
-  const cls: ClassifyResult = { parts: reads, stairCondition: Object.fromEntries(observations.map((x) => [x.id, stairDamage ?? 0.05])), structures, lamps: {}, calls: [] };
+  const cls: ClassifyResult = { parts: reads, stairCondition: Object.fromEntries(observations.map((x) => [x.id, stairDamage ?? 0.05])), structures, lamps: {}, wear: {}, calls: [] };
   return { o, cls, run: (cfg = DEFAULT_VALIDATOR) => validateClassifications(o, cls, source, cfg) };
 }
 
@@ -75,6 +75,22 @@ describe("deterministic evidence validation", () => {
     expect(r.trace.H02).toMatchObject({ label: "cannot_determine", reason: "condition_only_partially_visible" });
   });
 
+  it("D05-like: a staircase cut off at top and bottom still shows H02 when both sides are fully in view", () => {
+    const s = scene([{ role: "stair_side", items: [["handrail", "handrail"]] }, { role: "stair_side" }]);
+    for (const x of s.o.observations) x.visibility = "partial";
+    expect(s.run().categoryLabels.H02).toBe("present");
+  });
+
+  it("H02 present needs a second side in view: one empty side alone defers", () => {
+    expect(scene([{ role: "stair_side" }, { role: "stair_side", vis: "obscured" }]).run().trace.H02).toMatchObject({ label: "cannot_determine" });
+  });
+
+  it("D06-like: a damage read on worn paint or stains defers H03 (taxonomy: not visible)", () => {
+    const s = scene([{ role: "stair_treads" }], 0.9);
+    s.cls.wear = { O1: 0.8 };
+    expect(s.run().categoryLabels.H03).toBe("cannot_determine");
+  });
+
   it("H02 absent needs both sides seen with rails; one railed side is not enough", () => {
     expect(scene([{ role: "stair_side", items: [["metal handrail", "handrail"]] }, { role: "stair_side", items: [["metal handrail", "handrail"]] }]).run().categoryLabels.H02).toBe("absent");
     expect(scene([{ role: "stair_side", items: [["metal handrail", "handrail"]] }]).run().categoryLabels.H02).toBe("cannot_determine");
@@ -98,10 +114,16 @@ describe("deterministic evidence validation", () => {
     expect(r.roles[0].role).toBe("bath_wall");
   });
 
-  it("D08-like: an empty side on a staircase that is only partly in frame defers instead of claiming a missing rail", () => {
-    const s = scene([{ role: "stair_side" }, { role: "stair_side" }]);
-    for (const x of s.o.observations) x.visibility = "partial"; // the staircase itself is cut off
+  it("D08-like: left side obscured, right side seen empty → CANNOT_DETERMINE, not a missing-rail claim", () => {
+    const s = scene([{ role: "stair_side", vis: "obscured" }, { role: "stair_side" }]);
+    for (const x of s.o.observations) x.visibility = "partial";
     expect(s.run().trace.H02).toMatchObject({ label: "cannot_determine", reason: "condition_only_partially_visible" });
+  });
+
+  it("an empty tub floor on a tub only partly in frame defers H10 (whole-structure rule for bath/bed)", () => {
+    const s = scene([{ role: "bath_floor" }]);
+    s.o.observations[0].visibility = "partial";
+    expect(s.run().categoryLabels.H10).toBe("cannot_determine");
   });
 
   it("D09-like: an object GLiNER can't type is still clutter on the floor, not a clear floor", () => {

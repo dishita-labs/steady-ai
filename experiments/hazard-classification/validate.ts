@@ -65,7 +65,7 @@ function holds(p: PartRead, type: ItemType, cfg: ValidatorConfig): Tri {
 }
 
 /** Types that are NOT floor clutter when GLiNER is confident (cords have their own category, H07). */
-const NOT_CLUTTER: ItemType[] = ["rug", "cord", "furniture", "plant_decor", "fixture", "lamp", "handrail", "grab_bar", "towel_bar", "bath_mat"];
+const NOT_CLUTTER: ItemType[] = ["rug", "carpet", "cord", "furniture", "plant_decor", "fixture", "lamp", "handrail", "grab_bar", "towel_bar", "bath_mat"];
 
 /**
  * Floor clutter (H05): any object on the floor counts unless GLiNER is confident it is something
@@ -153,9 +153,12 @@ export function validateClassifications(o: ObservationOutput, cls: ClassifyResul
 
   const trace = {} as Record<HazardCategoryId, CategoryTrace>;
   trace.H01 = partRule(treads, "loose_object", "holds", cfg) ?? (sides.length ? defer(sides) : NA);
-  // H02 absence also needs both sides seen: one described side with a rail doesn't clear the other.
-  const h02 = partRule(sides, "handrail", "lacks", cfg, structureFull);
-  trace.H02 = !h02 ? (treads.length ? defer(treads) : NA) : h02.label === "absent" && sides.length < 2 ? defer(sides) : h02;
+  // H02 is "no handrail, or one on only one side": both a present and an absent claim need two
+  // sides fully seen. (Gemma marks a staircase "partial" when its top or bottom is cut off, so the
+  // whole-structure test is the wrong one here: it deferred D05/D10, whose sides were both in view.)
+  const h02 = partRule(sides, "handrail", "lacks", cfg);
+  const fullSides = sides.filter(full).length;
+  trace.H02 = !h02 ? (treads.length ? defer(treads) : NA) : h02.label !== "cannot_determine" && fullSides < 2 ? defer(sides, h02.label === "present" ? "condition_only_partially_visible" : "not_settled") : h02;
   // H03: a positive "damaged steps" read on a stairs observation; absence needs full treads and a confident no.
   if (!stairs.length) trace.H03 = NA;
   else {
@@ -163,7 +166,9 @@ export function validateClassifications(o: ObservationOutput, cls: ClassifyResul
     const reads = stairObs.map((id) => ({ id, t: tri(cls.stairCondition[id], cfg) }));
     const damaged = reads.filter((r) => r.t === "yes").map((r) => r.id);
     const dmgParts = stairs.filter((p) => damaged.includes(p.observationId));
-    if (dmgParts.some(full)) trace.H03 = { label: "present", reason: "visible_condition", evidence: dmgParts.filter(full).map(ref) };
+    const wearOnly = damaged.length > 0 && damaged.every((id) => tri(cls.wear?.[id], cfg) === "yes");
+    if (wearOnly) trace.H03 = defer(dmgParts, "absence_not_establishable_from_photo");
+    else if (dmgParts.some(full)) trace.H03 = { label: "present", reason: "visible_condition", evidence: dmgParts.filter(full).map(ref) };
     else if (dmgParts.length) trace.H03 = defer(dmgParts, "condition_only_partially_visible");
     else if (treads.length && treads.every(full) && reads.every((r) => r.t === "no")) trace.H03 = { label: "absent", reason: "visible_absence", evidence: treads.map(ref) };
     else trace.H03 = defer(stairs);

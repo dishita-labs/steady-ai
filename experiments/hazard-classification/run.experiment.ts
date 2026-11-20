@@ -68,12 +68,12 @@ it.skipIf(process.env.HAZARD_EXPERIMENT !== "1")("hazard classification experime
       const live = calls.every((c) => !c.cached);
       tCls = live ? Math.round(performance.now() - t0) : calls.reduce((n, c) => n + c.latencyMs, 0);
       s.observations = o.output;
-      s.classified = { parts: cls.parts, stairCondition: cls.stairCondition, structures: cls.structures, lamps: cls.lamps };
+      s.classified = { parts: cls.parts, stairCondition: cls.stairCondition, structures: cls.structures, lamps: cls.lamps, wear: cls.wear };
       s.latencyMs = tObs + tCls;
       const { result } = predict(s, DEFAULT_VALIDATOR);
       Object.assign(out, {
         observations: o.output,
-        classified: { parts: cls.parts, stairCondition: cls.stairCondition, structures: cls.structures, lamps: cls.lamps },
+        classified: { parts: cls.parts, stairCondition: cls.stairCondition, structures: cls.structures, lamps: cls.lamps, wear: cls.wear },
         classifyCalls: cls.calls,
         failedClassifications: cls.calls.filter((c) => !c.ok).length,
         roles: result!.roles,

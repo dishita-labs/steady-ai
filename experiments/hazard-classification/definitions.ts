@@ -159,6 +159,8 @@ export const ITEM_TYPES = {
   lamp: "a lamp or light",
   cord: "an electrical cord, cable, wire or power strip",
   rug: "a rug, runner, mat or doormat",
+  /** Fitted floor covering: neither clutter nor a throw rug (D05 "red carpet" read 0.45 as a rug). */
+  carpet: "wall-to-wall carpet or stair carpet",
   loose_object: "shoes, papers, books, boxes, bags, laundry, toys or other loose objects",
   furniture: "furniture or a large appliance",
   plant_decor: "a plant, flower pot or decoration",

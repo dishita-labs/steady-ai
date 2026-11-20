@@ -20,7 +20,7 @@ export interface StoredImage {
   imageId: string;
   gt: Record<HazardCategoryId, CategoryLabel>;
   observations?: ObservationOutput;
-  classified?: Pick<ClassifyResult, "parts" | "stairCondition" | "structures" | "lamps">;
+  classified?: Pick<ClassifyResult, "parts" | "stairCondition" | "structures" | "lamps" | "wear">;
   latencyMs: number;
 }
 

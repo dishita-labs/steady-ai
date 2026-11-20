@@ -50,6 +50,8 @@ export const STAIR_CONDITION_QUESTIONS = [
   "Does this describe an uneven step?",
   "Does this describe torn or lifted carpet?",
 ] as const;
+/** Taxonomy H03: worn paint's effect on traction isn't visible. A wear read turns damage into CD. */
+export const WEAR_QUESTION = "Does this describe worn paint, wear or stains?";
 /** Lamps outside a bed's parts: is the observation a lamp, and is it placed by the bed? */
 export const LAMP_QUESTION = "Is this a lamp?";
 export const BY_BED_QUESTION = "Is this on a nightstand or next to a bed?";
@@ -87,6 +89,8 @@ export interface ClassifyResult {
   parts: PartRead[];
   /** Per observation that has parts: highest P(yes) of the step-damage questions. */
   stairCondition: Record<string, PYes>;
+  /** Per observation that has parts: P(the description is about wear, worn paint or stains). */
+  wear: Record<string, PYes>;
   /** Per observation: P(it is a lamp) and P(it sits on a nightstand / next to a bed). */
   lamps: Record<string, { lamp: PYes; byBed: PYes }>;
   /** Per observation that has parts: P(yes) it is each structure. */
@@ -127,6 +131,7 @@ export async function classifyObservations(obs: ObservationOutput, concurrency =
   const stairCondition: Record<string, PYes> = {};
   const structures: Record<string, Partial<Record<Structure, PYes>>> = {};
   const lamps: Record<string, { lamp: PYes; byBed: PYes }> = {};
+  const wear: Record<string, PYes> = {};
   /** Keep the highest P(yes) across several single-concept questions; any failed call → null. */
   const maxInto = (get: () => PYes | undefined, put: (p: PYes) => void) => (p: PYes) => {
     const cur = get();
@@ -138,6 +143,7 @@ export async function classifyObservations(obs: ObservationOutput, concurrency =
     jobs.push({ text: `${o.feature}, ${o.location}`, question: BY_BED_QUESTION, set: (p) => (l.byBed = p) });
     if (!o.parts.length) continue;
     const whole = `${o.feature}: ${o.description}`;
+    jobs.push({ text: whole, question: WEAR_QUESTION, set: (p) => (wear[o.id] = p) });
     for (const q of STAIR_CONDITION_QUESTIONS) jobs.push({ text: whole, question: q, set: maxInto(() => stairCondition[o.id], (p) => (stairCondition[o.id] = p)) });
     const st = (structures[o.id] = {} as Partial<Record<Structure, PYes>>);
     for (const k of Object.keys(STRUCTURE_QUESTIONS) as Structure[]) {
@@ -155,5 +161,5 @@ export async function classifyObservations(obs: ObservationOutput, concurrency =
     j.set(c.pYes);
     return c;
   });
-  return { parts, stairCondition, structures, lamps, calls };
+  return { parts, stairCondition, wear, structures, lamps, calls };
 }
