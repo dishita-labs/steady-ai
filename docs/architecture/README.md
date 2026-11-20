@@ -51,8 +51,8 @@ Steady turns one room photo into an approved, evidence-backed shopping action. A
 
 | Backend | When | Notes |
 |---|---|---|
-| SingleStore (`mysql2`) | `SINGLESTORE_HOST/USER/PASSWORD` set | Every table stores the full entity in `body JSON`, plus typed filter columns. `SHARD KEY (case_id)`. TLS on by default. |
-| JSONL | otherwise | `.data/records/<table>.jsonl`, append-only `{op, at, row}`, same row shape as `body` |
+| SingleStore (`mysql2`) | `SINGLESTORE_HOST/USER/PASSWORD` set | Three tables: `cases`, `case_items` (every per-case collection, keyed by `kind`) and append-only `audit_events`. Each row stores the full entity in `body JSON`, plus typed filter columns. `SHARD KEY (case_id)`. TLS on by default. |
+| JSONL | otherwise | `.data/records/<collection>.jsonl`, append-only `{op, at, row}`, same row shape as `body` |
 | Memory | tests | |
 
 `STEADY_RECORDER=jsonl|singlestore` forces one. The audit log is append-only in every backend.

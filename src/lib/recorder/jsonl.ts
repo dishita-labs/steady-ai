@@ -1,5 +1,5 @@
 /**
- * Local recorder: one append-only JSONL file per SingleStore table, under
+ * Local recorder: one append-only JSONL file per collection, under
  * `<STEADY_DATA_DIR>/records/`. Each line is `{ op, at, row }`, with `row` being the full
  * entity (the same shape the SingleStore `body` column holds), so the files can be loaded
  * into SingleStore later (a loader is not built yet).
@@ -11,7 +11,7 @@ import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AuditEvent, CaseId, HomeownerCase } from "../../types/domain";
 import type { CaseCollections, CaseRepository, CollectionItem, CollectionName } from "./repository";
-import { TABLES } from "./tables";
+import { RECORD_FILES as TABLES } from "./tables";
 
 export interface JsonlRecord<T = unknown> {
   op: "insert" | "upsert" | "append";

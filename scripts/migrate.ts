@@ -20,15 +20,15 @@ if (missing.length) {
 const database = env.SINGLESTORE_DATABASE || "steady";
 const conn = await mysql.createConnection({
   host: env.SINGLESTORE_HOST,
-  port: Number(env.SINGLESTORE_PORT || 3306),
+  port: Number(env.SINGLESTORE_PORT || 3333),
   user: env.SINGLESTORE_USER,
   password: env.SINGLESTORE_PASSWORD,
+  // Shared tier requires the database at connect time and does not allow CREATE DATABASE.
+  database,
   ssl: env.SINGLESTORE_SSL === "false" ? undefined : { minVersion: "TLSv1.2", rejectUnauthorized: true },
 });
 
 try {
-  await conn.query(`CREATE DATABASE IF NOT EXISTS \`${database.replace(/`/g, "")}\``);
-  await conn.query(`USE \`${database.replace(/`/g, "")}\``);
   const sql = await readFile(new URL("../src/lib/recorder/schema.sql", import.meta.url), "utf8");
   const statements = sql
     .split(/;\s*$/m)

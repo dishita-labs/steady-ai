@@ -1,9 +1,16 @@
 /**
- * Mapping from domain collections to SingleStore tables (see schema.sql).
+ * Storage layout for the recorders (see schema.sql).
  *
- * Every table stores the full entity in `body JSON`, plus a few typed columns copied out of it
- * for filtering and joins. Reads use `body` only, so adding a field to a domain type never
- * needs a migration; adding a filter column does.
+ * SingleStore has three tables:
+ *   - `cases`: one row per case, with typed columns.
+ *   - `case_items`: every per-case collection (images, hazards, ... actions), told apart by
+ *     `kind`. The free shared tier allows 10 tables per database, which rules out one table
+ *     per collection.
+ *   - `audit_events`: append-only, kept separate so nothing ever UPDATEs it.
+ *
+ * Every row stores the full entity in `body JSON`, plus a few typed columns copied out of it
+ * for filtering. Reads use `body` only, so adding a field to a domain type never needs a
+ * migration; adding a filter column does.
  */
 
 import type {
@@ -14,7 +21,6 @@ import type {
   HomeownerCase,
   ProductCandidate,
   ProductClassification,
-  ProductEvidence,
   ShoppingAction,
   ShoppingRequirement,
   UploadedImage,
@@ -22,6 +28,13 @@ import type {
 import type { CollectionName } from "./repository";
 
 export const TABLES = {
+  cases: "cases",
+  items: "case_items",
+  audit: "audit_events",
+} as const;
+
+/** JSONL recorder: one file per collection (the file name, without `.jsonl`). */
+export const RECORD_FILES = {
   cases: "cases",
   images: "uploaded_images",
   hazards: "hazard_findings",
@@ -42,7 +55,7 @@ export function toDatetime(iso: string): string {
   return iso.replace("T", " ").replace("Z", "").slice(0, 26);
 }
 
-/** Typed columns per table, besides `id`, `case_id` and `body`. */
+/** Typed columns for `cases` and `audit_events`, besides `id`, `case_id` and `body`. */
 export const COLUMNS = {
   cases: (c: HomeownerCase): Columns => ({
     stage: c.stage,
@@ -51,35 +64,18 @@ export const COLUMNS = {
     created_at: toDatetime(c.createdAt),
     updated_at: toDatetime(c.updatedAt),
   }),
-  images: (i: UploadedImage): Columns => ({ room: i.room, analysis_status: i.analysisStatus, sha256: i.sha256 }),
-  hazards: (h: HazardFinding): Columns => ({ image_id: h.imageId, category: h.category, label: h.label, severity: h.severity }),
-  questions: (q: ContextQuestion): Columns => ({ status: q.status, requirement_id: q.requirementId ?? null }),
-  requirements: (r: ShoppingRequirement): Columns => ({
-    rule_id: r.ruleId,
-    product_type: r.productType,
-    status: r.status,
-    safety_critical: r.safetyCritical,
-  }),
-  candidates: (c: ProductCandidate): Columns => ({ url: c.url, status: c.status }),
-  evidence: (e: ProductEvidence): Columns => ({ candidate_id: e.candidateId, kind: e.kind, source_url: e.sourceUrl }),
-  classifications: (k: ProductClassification): Columns => ({
-    candidate_id: k.candidateId,
-    requirement_id: k.requirementId,
-    concern: k.concern,
-  }),
-  decisions: (d: ConstraintDecision): Columns => ({
-    candidate_id: d.candidateId,
-    requirement_id: d.requirementId,
-    outcome: d.outcome,
-    engine_version: d.engineVersion,
-    decided_at: toDatetime(d.decidedAt),
-  }),
-  actions: (a: ShoppingAction): Columns => ({
-    type: a.type,
-    status: a.status,
-    simulated: a.simulated,
-    adapter: a.adapter,
-    updated_at: toDatetime(a.updatedAt),
-  }),
   audit: (e: AuditEvent): Columns => ({ at: toDatetime(e.at), type: e.type, stage: e.stage }),
-} satisfies Record<keyof typeof TABLES, (x: never) => Columns>;
+};
+
+/** The `case_items.status` column: each kind's main state field, or null when it has none. */
+export const ITEM_STATUS = {
+  images: (i: UploadedImage) => i.analysisStatus,
+  hazards: (h: HazardFinding) => h.severity,
+  questions: (q: ContextQuestion) => q.status,
+  requirements: (r: ShoppingRequirement) => r.status,
+  candidates: (c: ProductCandidate) => c.status,
+  evidence: (): null => null,
+  classifications: (k: ProductClassification) => (k.concern ? "concern" : "ok"),
+  decisions: (d: ConstraintDecision) => d.outcome,
+  actions: (a: ShoppingAction) => a.status,
+} satisfies Record<CollectionName, (x: never) => string | null>;

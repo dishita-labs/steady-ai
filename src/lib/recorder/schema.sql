@@ -1,8 +1,8 @@
--- Steady: SingleStore schema. DRAFT: not yet run against a cluster.
--- Apply with `aube run db:migrate`.
+-- Steady: SingleStore schema. Apply with `aube run db:migrate`.
 --
--- Every table keeps the full domain entity in `body` (see src/lib/recorder/tables.ts) plus a
--- few typed columns copied out of it for filtering. Reads use `body`.
+-- Three tables, because the free shared tier allows 10 per database (see src/lib/recorder/tables.ts).
+-- Every row keeps the full domain entity in `body`, plus a few typed columns copied out of it
+-- for filtering. Reads use `body`.
 -- Audit events are append-only: the app never UPDATEs or DELETEs them.
 -- SHARD KEY (case_id) keeps all of one case's rows on one partition.
 
@@ -19,106 +19,16 @@ CREATE TABLE IF NOT EXISTS cases (
   SHARD KEY (case_id)
 );
 
-CREATE TABLE IF NOT EXISTS uploaded_images (
+-- Every per-case collection: kind is the CollectionName (images, hazards, questions,
+-- requirements, candidates, evidence, classifications, decisions, actions).
+-- status is that kind's main state field (ITEM_STATUS in tables.ts), or NULL.
+CREATE TABLE IF NOT EXISTS case_items (
   id VARCHAR(64) NOT NULL,
   case_id VARCHAR(64) NOT NULL,
-  room VARCHAR(32) NOT NULL,
-  analysis_status VARCHAR(16) NOT NULL,
-  sha256 CHAR(64) NOT NULL,
+  kind VARCHAR(24) NOT NULL,
+  status VARCHAR(32),
   body JSON NOT NULL,
-  PRIMARY KEY (id, case_id),
-  SHARD KEY (case_id)
-);
-
-CREATE TABLE IF NOT EXISTS hazard_findings (
-  id VARCHAR(64) NOT NULL,
-  case_id VARCHAR(64) NOT NULL,
-  image_id VARCHAR(64) NOT NULL,
-  category CHAR(3) NOT NULL,
-  label VARCHAR(24) NOT NULL,
-  severity VARCHAR(16) NOT NULL,
-  body JSON NOT NULL,
-  PRIMARY KEY (id, case_id),
-  SHARD KEY (case_id)
-);
-
-CREATE TABLE IF NOT EXISTS context_questions (
-  id VARCHAR(64) NOT NULL,
-  case_id VARCHAR(64) NOT NULL,
-  status VARCHAR(16) NOT NULL,
-  requirement_id VARCHAR(64),
-  body JSON NOT NULL,
-  PRIMARY KEY (id, case_id),
-  SHARD KEY (case_id)
-);
-
-CREATE TABLE IF NOT EXISTS shopping_requirements (
-  id VARCHAR(64) NOT NULL,
-  case_id VARCHAR(64) NOT NULL,
-  rule_id VARCHAR(64) NOT NULL,
-  product_type VARCHAR(64) NOT NULL,
-  status VARCHAR(16) NOT NULL,
-  safety_critical BOOL NOT NULL,
-  body JSON NOT NULL,
-  PRIMARY KEY (id, case_id),
-  SHARD KEY (case_id)
-);
-
-CREATE TABLE IF NOT EXISTS product_candidates (
-  id VARCHAR(64) NOT NULL,
-  case_id VARCHAR(64) NOT NULL,
-  url TEXT NOT NULL,
-  status VARCHAR(24) NOT NULL,
-  body JSON NOT NULL,
-  PRIMARY KEY (id, case_id),
-  SHARD KEY (case_id)
-);
-
-CREATE TABLE IF NOT EXISTS product_evidence (
-  id VARCHAR(64) NOT NULL,
-  case_id VARCHAR(64) NOT NULL,
-  candidate_id VARCHAR(64) NOT NULL,
-  kind VARCHAR(32) NOT NULL,
-  source_url TEXT NOT NULL,
-  body JSON NOT NULL,
-  PRIMARY KEY (id, case_id),
-  SHARD KEY (case_id)
-);
-
-CREATE TABLE IF NOT EXISTS product_classifications (
-  id VARCHAR(64) NOT NULL,
-  case_id VARCHAR(64) NOT NULL,
-  candidate_id VARCHAR(64) NOT NULL,
-  requirement_id VARCHAR(64) NOT NULL,
-  concern BOOL NOT NULL,
-  body JSON NOT NULL,
-  PRIMARY KEY (id, case_id),
-  SHARD KEY (case_id)
-);
-
-CREATE TABLE IF NOT EXISTS constraint_decisions (
-  id VARCHAR(64) NOT NULL,
-  case_id VARCHAR(64) NOT NULL,
-  candidate_id VARCHAR(64) NOT NULL,
-  requirement_id VARCHAR(64) NOT NULL,
-  outcome VARCHAR(24) NOT NULL,
-  engine_version VARCHAR(32) NOT NULL,
-  decided_at DATETIME(6) NOT NULL,
-  body JSON NOT NULL,
-  PRIMARY KEY (id, case_id),
-  SHARD KEY (case_id)
-);
-
-CREATE TABLE IF NOT EXISTS shopping_actions (
-  id VARCHAR(64) NOT NULL,
-  case_id VARCHAR(64) NOT NULL,
-  type VARCHAR(32) NOT NULL,
-  status VARCHAR(24) NOT NULL,
-  simulated BOOL NOT NULL,
-  adapter VARCHAR(64) NOT NULL,
-  updated_at DATETIME(6) NOT NULL,
-  body JSON NOT NULL,
-  PRIMARY KEY (id, case_id),
+  PRIMARY KEY (case_id, kind, id),
   SHARD KEY (case_id)
 );
 

@@ -8,3 +8,7 @@ prefix = "steady-ai"
 [secrets]
 SIE_API_KEY= { provider = "keychain", value = "SIE_API_KEY" }
 EXA_API_KEY= { provider = "keychain", value = "EXA_API_KEY" }
+SINGLESTORE_USER= { provider = "keychain", value = "SINGLESTORE_USER" }
+SINGLESTORE_PASSWORD= { provider = "keychain", value = "SINGLESTORE_PASSWORD" }
+SINGLESTORE_HOST= { provider = "keychain", value = "SINGLESTORE_HOST" }
+SINGLESTORE_DATABASE= { provider = "keychain", value = "SINGLESTORE_DATABASE" }

@@ -17,6 +17,7 @@ Each decision is short and dated. **Confirmed** means we've decided it. **Open**
 11. **Use the hazard taxonomy H01–H11** from the prep work.
 12. **Supply-chain exceptions** (`aube-workspace.yaml`), reviewed and pinned to exact versions: `@vercel/functions@3.11.3`, `@vercel/oidc@4.0.9` and `@vercel/oidc@3.8.10`, `@vercel/cli-config@0.4.0` and `@vercel/cli-config@0.3.1`, `@vercel/cli-exec@1.0.1`, and the ten `@swc/core-*@1.15.3` platform binaries. They come in through `@workflow/*` and have no trusted-publisher provenance. Every other resolved package passed `aube trust check`.
 13. **The app has no auth of its own: it is a frontend that sits behind an auth proxy.** The proxy decides who can reach it, so the app has no token, login or per-user check, and the public case-photo URL (`/cases/:id/photo`) and the approval route are acceptable for now. This only holds while the app is reachable only through the proxy; don't expose it directly.
+14. **SingleStore uses three tables, not one per collection.** The free shared tier allows 10 tables per database and needs the database named at connect time. Per-case collections share `case_items` (keyed by `kind`, with a nullable `status`). `cases` and append-only `audit_events` stay separate. JSONL still writes one file per collection.
 
 ## Open
 

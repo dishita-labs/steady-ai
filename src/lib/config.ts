@@ -52,7 +52,7 @@ export const INTEGRATIONS: Record<IntegrationName, IntegrationInfo> = {
     label: "SingleStore",
     role: "System of record: case, findings, products, evidence, decisions, actions, audit",
     required: ["SINGLESTORE_HOST", "SINGLESTORE_USER", "SINGLESTORE_PASSWORD"],
-    optional: { SINGLESTORE_PORT: "3306", SINGLESTORE_DATABASE: "steady" },
+    optional: { SINGLESTORE_PORT: "3333", SINGLESTORE_DATABASE: "steady" },
     docs: "https://docs.singlestore.com/cloud/developer-resources/connect-with-application-development-tools/connect-with-node-js/",
     verified: false,
   },

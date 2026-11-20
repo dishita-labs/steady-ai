@@ -4,15 +4,13 @@
  * SingleStore's docs recommend `singlestore-nodejs`, but aube's supply-chain check refused it
  * (low download count), and SingleStore speaks the MySQL protocol, so we use `mysql2`.
  * Shared/cloud clusters require TLS; set SINGLESTORE_SSL=false only for a local dev cluster.
- *
- * NOT yet run against a real cluster.
  */
 
 import mysql, { type Pool, type RowDataPacket } from "mysql2/promise";
 import { envOr, requireConfigured } from "../config";
 import type { AuditEvent, CaseId, HomeownerCase } from "../../types/domain";
 import type { CaseCollections, CaseRepository, CollectionItem, CollectionName } from "./repository";
-import { COLUMNS, TABLES, type Columns } from "./tables";
+import { COLUMNS, ITEM_STATUS, TABLES, type Columns } from "./tables";
 
 export function createSingleStorePool(env = process.env): Pool {
   requireConfigured("singlestore", env);
@@ -70,14 +68,18 @@ export class SingleStoreCaseRepository implements CaseRepository {
   }
 
   async upsert<K extends CollectionName>(collection: K, item: CollectionItem<K>) {
-    const cols = (COLUMNS[collection] as (x: CollectionItem<K>) => Columns)(item);
-    await this.put(TABLES[collection], item.id, item.caseId, cols, item);
+    const status = (ITEM_STATUS[collection] as (x: CollectionItem<K>) => string | null)(item);
+    await this.pool.execute(
+      `INSERT INTO ${TABLES.items} (id, case_id, kind, status, body) VALUES (?, ?, ?, ?, ?) ` +
+        `ON DUPLICATE KEY UPDATE status = VALUES(status), body = VALUES(body)`,
+      [item.id, item.caseId, collection, status, JSON.stringify(item)],
+    );
   }
 
   async list<K extends CollectionName>(collection: K, caseId: CaseId) {
     const [rows] = await this.pool.execute<RowDataPacket[]>(
-      `SELECT body FROM ${TABLES[collection]} WHERE case_id = ?`,
-      [caseId],
+      `SELECT body FROM ${TABLES.items} WHERE case_id = ? AND kind = ?`,
+      [caseId, collection],
     );
     return rows.map((r) => parseBody<CollectionItem<K>>(r)) as CaseCollections[K];
   }
