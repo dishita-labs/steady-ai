@@ -32,7 +32,12 @@ export interface ValidatorConfig {
   /** A GLiNER no counts when P(yes) < this. Between noBelow and minYes is "unknown". */
   noBelow: number;
 }
-export const DEFAULT_VALIDATOR: ValidatorConfig = { minYes: 0.5, noBelow: 0.5 };
+/**
+ * Default chosen on the development set (2026-11-20): yes ≥ 0.5, no < 0.3, unknown in between.
+ * Versus no band (0.5/0.5) it removed the one unsupported ABSENT (D10 H03) at the cost of a few
+ * over-deferrals. Thin evidence (one cell); confirm on the held-out set before relying on it.
+ */
+export const DEFAULT_VALIDATOR: ValidatorConfig = { minYes: 0.5, noBelow: 0.3 };
 
 type Tri = "yes" | "no" | "unknown";
 const tri = (p: PYes | undefined, cfg: ValidatorConfig): Tri => (p == null ? "unknown" : p >= cfg.minYes ? "yes" : p < cfg.noBelow ? "no" : "unknown");
@@ -68,16 +73,22 @@ function holds(p: PartRead, type: ItemType, cfg: ValidatorConfig): Tri {
 const NOT_CLUTTER: ItemType[] = ["rug", "carpet", "cord", "furniture", "plant_decor", "fixture", "lamp", "handrail", "grab_bar", "towel_bar", "bath_mat"];
 
 /**
- * Floor clutter (H05): any object on the floor counts unless GLiNER is confident it is something
- * else (a rug, cord, furniture...). An object it can't type is still an object on the floor;
- * treating it as "nothing" would turn missing information into absence.
+ * Floor clutter (H05), per item:
+ *   yes      GLiNER says loose object, or it can't type the item and hasn't ruled "loose object" out
+ *            (D09's water jug at 0.40: an object on the floor it can't name is still an object);
+ *   no       GLiNER is confident it is something else (rug, carpet, cord, furniture...);
+ *   unknown  it can't type the item AND rules out "loose object" (D05's "red carpet").
+ * Unknown never becomes absent or present; the floor stays undecided.
  */
 function holdsClutter(p: PartRead, cfg: ValidatorConfig): Tri {
   const reads = p.items.map((it): Tri => {
-    if (tri(it.types.loose_object, cfg) === "yes" && (it.types.plant_decor ?? 0) <= (it.types.loose_object ?? 0)) return "yes";
-    return NOT_CLUTTER.some((t) => tri(it.types[t], cfg) === "yes") ? "no" : "yes";
+    const loose = tri(it.types.loose_object, cfg);
+    if (loose === "yes" && (it.types.plant_decor ?? 0) <= (it.types.loose_object ?? 0)) return "yes";
+    if (NOT_CLUTTER.some((t) => tri(it.types[t], cfg) === "yes")) return "no";
+    return loose === "no" ? "unknown" : "yes";
   });
-  return reads.includes("yes") ? "yes" : "no";
+  if (reads.includes("yes")) return "yes";
+  return reads.every((r) => r === "no") ? "no" : "unknown";
 }
 
 export type TraceReason =

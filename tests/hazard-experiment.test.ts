@@ -131,6 +131,11 @@ describe("deterministic evidence validation", () => {
     s.cls.parts[0].items[0].types.loose_object = 0.4;
     expect(s.run().categoryLabels.H05).toBe("present");
     expect(scene([{ role: "open_floor", items: [["potted plant", "plant_decor"], ["rug", "rug"]] }]).run().categoryLabels.H05).toBe("absent");
+    // Untyped AND confidently not a loose object (D05 "red carpet") → undecided, not clutter.
+    const c = scene([{ role: "open_floor", items: [["red carpet", null] as [string, ItemType | null]] }]);
+    c.cls.parts[0].items[0].types.loose_object = 0.1;
+    c.cls.parts[0].items[0].types.rug = 0.45;
+    expect(c.run().categoryLabels.H05).toBe("cannot_determine");
   });
 
   it("D07-like: a lamp observed on the nightstand clears H11 even when no bedside part lists it", () => {
