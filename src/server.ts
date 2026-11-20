@@ -12,7 +12,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ServerSentEventGenerator } from "@starfederation/datastar-sdk/web";
 import { Hono } from "hono";
 import { HookNotFoundError } from "workflow/errors";
 import { getRun, start } from "workflow/api";
@@ -21,6 +20,7 @@ import { INTEGRATIONS, dataDir, isConfigured, type IntegrationName } from "./lib
 import { newId } from "./lib/ids";
 import { getRepository, loadSnapshot, selectRecorder, type CaseRepository } from "./lib/recorder";
 import { noteActivity, warmupStatus } from "./lib/vision/warmup";
+import { sseStream } from "./ui/sse";
 import { errorSlot, type CaseView, renderApp, renderPage } from "./ui/view";
 import type { RoomType, UploadedImage } from "./types/domain";
 import { approvalHook, approvalToken, contextHook, contextToken } from "./workflows/hooks";
@@ -49,7 +49,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Datastar response that only sends the given patches. */
 function patches(...elements: string[]): Response {
-  return ServerSentEventGenerator.stream((sse) => {
+  return sseStream((sse) => {
     for (const e of elements) sse.patchElements(e);
   });
 }
@@ -120,7 +120,7 @@ app.post("/cases", async (c) => {
       image: { id: imageId, storageKey, mimeType, sha256, room, consentConfirmed: true, uploadedAt: new Date().toISOString() },
     },
   ]);
-  return ServerSentEventGenerator.stream((sse) => {
+  return sseStream((sse) => {
     sse.executeScript(`window.location.assign(${JSON.stringify(`/cases/${caseId}`)})`);
   });
 });
@@ -141,7 +141,7 @@ app.get("/cases/:caseId/photo", async (c) => {
 app.get("/cases/:caseId/stream", async (c) => {
   const repo = getRepository();
   const caseId = c.req.param("caseId");
-  return ServerSentEventGenerator.stream(async (sse) => {
+  return sseStream(async (sse) => {
     const push = async (finished: boolean) => {
       const view = await loadView(repo, caseId, finished);
       if (view) sse.patchElements(renderApp(view).value);
