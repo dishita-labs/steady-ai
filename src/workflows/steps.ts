@@ -18,14 +18,15 @@ import { createAuditEvent, type NewAuditEvent } from "../lib/audit";
 import { deriveStatus, tryAdvance, type CaseStatus, type WorkflowStage } from "../lib/case/state";
 import { dataDir, envOr } from "../lib/config";
 import { newId, stableId } from "../lib/ids";
-import {
-  chunkText,
-  getProductDecider,
-  questionsFor,
-} from "../lib/product-decisions";
+import { deriveAttributes } from "../lib/product-fitness/attributes";
+import { CHECKLISTS, type ProductType } from "../lib/product-fitness/checklist";
+import { productPageCheck } from "../lib/product-fitness/page";
+import { maxYes, readChecklist } from "../lib/product-fitness/read";
+import { parseSheet, SHEET_QUERY, SHEET_SCHEMA, sheetText, verifySheet } from "../lib/product-fitness/sheet";
+import { SHOPS_FOR } from "../lib/product-fitness/shops";
 import { getProductSearchProvider } from "../lib/product-search";
 import { getRepository, loadSnapshot, type CaseRepository } from "../lib/recorder";
-import { classificationConcern, evaluateCandidate } from "../lib/rules/engine";
+import { evaluateCandidate, selectForPurchase } from "../lib/rules/engine";
 import { deriveRequirements, ruleFor } from "../lib/rules/requirements";
 import { approve, executeApproved, getShoppingAdapter } from "../lib/shopping";
 import { getVisionAnalyzer, validateVisionResult } from "../lib/vision";
@@ -39,6 +40,7 @@ import type {
   ProductCandidate,
   ProductClassification,
   ProductEvidence,
+  TypedAnswer,
   UploadedImage,
 } from "../types/domain";
 import type { ProgressEvent } from "./events";
@@ -507,6 +509,15 @@ export async function applyContextAnswers(caseId: string, payload: ContextAnswer
   });
 }
 
+/** Results per Exa search. Each is a candidate only if it's a single-product page. */
+const SEARCH_RESULTS = 10;
+
+/**
+ * Exa product search for one requirement, restricted to the product's shops, with a structured
+ * seller sheet per result (src/lib/product-fitness). Every sheet quote is verified verbatim
+ * against the page; a page becomes a candidate only if it's a single-product page. Pages that
+ * aren't are audited, never stored, so nothing is kept that the rules can't use.
+ */
 export async function researchProducts(caseId: string, requirementId: string): Promise<{ candidateIds: string[] }> {
   "use step";
   return guarded(caseId, "researchProducts", async () => {
@@ -517,49 +528,59 @@ export async function researchProducts(caseId: string, requirementId: string): P
     if (!rule) throw new FatalError(`Rule ${req.ruleId} no longer exists`);
 
     const started = Date.now();
-    const pages = await getProductSearchProvider().search({ requirementId, query: rule.searchQuery });
+    const includeDomains = SHOPS_FOR[req.productType as ProductType];
+    const pages = await getProductSearchProvider().search({
+      requirementId,
+      query: rule.searchQuery,
+      numResults: SEARCH_RESULTS,
+      includeDomains,
+      extract: { query: SHEET_QUERY, schema: SHEET_SCHEMA },
+    });
     const candidateIds: string[] = [];
-    for (const p of pages) {
-      const candidateId = stableId("cand", requirementId, p.url);
-      const evidence: ProductEvidence[] = [];
-      if (p.text) {
-        evidence.push({
-          id: stableId("ev", candidateId, "page_text"),
-          caseId,
-          candidateId,
-          sourceUrl: p.url,
-          kind: "page_text",
-          excerpt: p.text,
-          source: { provider: "exa", externalRef: p.requestId, at: p.retrievedAt },
-        });
+    const excluded: { url: string; reason: string }[] = [];
+    const sheets: { candidateId: string; quotes: number; dropped: number }[] = [];
+    for (const [i, p] of pages.entries()) {
+      const parsed = p.text ? parseSheet(p.summary) : undefined;
+      const sheet = parsed && verifySheet(parsed, p.text!, p.title ?? "");
+      const check = productPageCheck({ url: p.url, sheet });
+      if (!check.ok || !sheet) {
+        excluded.push({ url: p.url, reason: check.ok ? "no product sheet" : check.reason });
+        continue;
       }
-      (p.highlights ?? []).forEach((h, i) =>
-        evidence.push({
-          id: stableId("ev", candidateId, "highlight", i),
+      const candidateId = stableId("cand", requirementId, p.url);
+      const source = { provider: "exa" as const, externalRef: p.requestId, at: p.retrievedAt };
+      const evidence: ProductEvidence[] = [
+        {
+          // Verbatim seller quotes only (each checked against the page text), one per line.
+          id: stableId("ev", candidateId, "seller_sheet"),
           caseId,
           candidateId,
           sourceUrl: p.url,
-          kind: "highlight",
-          excerpt: h,
-          source: { provider: "exa", externalRef: p.requestId, at: p.retrievedAt },
-        }),
-      );
+          kind: "structured_extraction",
+          excerpt: sheetText(sheet),
+          source,
+        },
+        { id: stableId("ev", candidateId, "page_text"), caseId, candidateId, sourceUrl: p.url, kind: "page_text", excerpt: p.text!, source },
+        ...(p.highlights ?? []).map((h, j): ProductEvidence => ({ id: stableId("ev", candidateId, "highlight", j), caseId, candidateId, sourceUrl: p.url, kind: "highlight", excerpt: h, source })),
+      ];
       for (const e of evidence) await repo.upsert("evidence", e);
       const candidate: ProductCandidate = {
         id: candidateId,
         caseId,
         requirementIds: [requirementId],
-        title: p.title ?? p.url,
+        title: sheet.productName || p.title || p.url,
         url: p.url,
         retailer: new URL(p.url).hostname,
-        // Prices and specs are NOT parsed from page text yet; attributes stay empty → unknown.
+        // Filled by decideProduct from GLiNER reads backed by verified seller quotes.
         attributes: [],
         evidenceIds: evidence.map((e) => e.id),
         discoveredBy: { provider: "exa", query: rule.searchQuery, externalRef: p.requestId, at: p.retrievedAt },
+        searchRank: i + 1,
         status: "discovered",
       };
       await repo.upsert("candidates", candidate);
       candidateIds.push(candidateId);
+      sheets.push({ candidateId, quotes: sheet.quotes, dropped: sheet.dropped.length });
     }
     await audit(repo, {
       caseId,
@@ -567,8 +588,8 @@ export async function researchProducts(caseId: string, requirementId: string): P
       actor: { kind: "tool", id: "exa" },
       stage: "REQUIREMENTS_DEFINED",
       subject: { kind: "requirement", id: requirementId },
-      summary: `${pages.length} result(s) for "${rule.searchQuery}".`,
-      data: { urls: pages.map((p) => p.url), candidateIds },
+      summary: `${pages.length} result(s) for "${rule.searchQuery}", ${candidateIds.length} single-product page(s).`,
+      data: { urls: pages.map((p) => p.url), candidateIds, includeDomains, excluded, sheets },
       toolCall: { provider: "exa", operation: "search", ok: true, durationMs: Date.now() - started, externalRef: pages[0]?.requestId },
     });
     await syncCase(repo, caseId, "researchProducts", `${candidateIds.length} candidate(s) for ${req.productType}.`);
@@ -576,50 +597,61 @@ export async function researchProducts(caseId: string, requirementId: string): P
   });
 }
 
+/**
+ * GLiNER2.5 Decide reads the product-fitness checklist over the candidate's verified seller sheet
+ * (never the whole page: reviews and Q&A caused false readings). Each item sets an attribute only
+ * when GLiNER says yes AND a verified seller quote backs it (decision 15). The rules engine then
+ * decides from those attributes. The classification itself stays advisory: a red-flag read only
+ * raises a concern, which can downgrade, never upgrade.
+ */
 export async function decideProduct(caseId: string, candidateId: string, requirementId: string): Promise<{ concern: boolean }> {
   "use step";
   return guarded(caseId, "decideProduct", async () => {
     const repo = getRepository();
     const req = (await repo.list("requirements", caseId)).find((r) => r.id === requirementId);
-    const evidence = (await repo.list("evidence", caseId)).filter((e) => e.candidateId === candidateId && e.kind === "page_text");
     if (!req) throw new FatalError(`Requirement ${requirementId} not found`);
-    if (evidence.length === 0) return { concern: false }; // nothing to read; the rules engine will say unknown
+    const candidate = (await repo.list("candidates", caseId)).find((c) => c.id === candidateId);
+    if (!candidate) throw new FatalError(`Candidate ${candidateId} not found`);
+    const sheet = (await repo.list("evidence", caseId)).find((e) => e.candidateId === candidateId && e.kind === "structured_extraction");
+    const checklist = CHECKLISTS[req.productType as ProductType];
+    if (!sheet || !checklist) return { concern: false }; // nothing to read; the rules engine will say unknown
 
-    const questions = questionsFor(req.productType, [...req.mandatory, ...req.preferred]);
-    const decider = getProductDecider();
-    let anyConcern = false;
-    // TODO: decide how to combine answers across chunks. For now each chunk is its own classification.
-    for (const ev of evidence) {
-      const chunks = chunkText(ev.excerpt);
-      for (let i = 0; i < chunks.length; i++) {
-        const started = Date.now();
-        const res = await decider.decide({ text: chunks[i], questions });
-        const { concern, reasons } = classificationConcern(res.answers);
-        anyConcern ||= concern;
-        const k: ProductClassification = {
-          id: stableId("cls", candidateId, requirementId, ev.id, i),
-          caseId,
-          candidateId,
-          requirementId,
-          answers: res.answers,
-          concern,
-          evidenceIds: [ev.id],
-          source: res.source,
-        };
-        await repo.upsert("classifications", k);
-        await audit(repo, {
-          caseId,
-          type: "product.classified",
-          actor: { kind: "tool", id: "sie-decide" },
-          stage: "PRODUCTS_RESEARCHED",
-          subject: { kind: "candidate", id: candidateId },
-          summary: concern ? `Concern: ${reasons.join("; ")}` : "No concern raised.",
-          data: { classificationId: k.id, chunk: i, of: chunks.length },
-          toolCall: { provider: "sie-decide", operation: "extract", ok: true, durationMs: Date.now() - started },
-        });
-      }
-    }
-    return { concern: anyConcern };
+    const started = Date.now();
+    // A transient SIE error fails the step so it's retried; a permanent one is a missing read.
+    const read = await readChecklist([{ key: candidateId, text: sheet.excerpt }], checklist.items, { rethrow: (e) => !isPermanentRequestError(e) });
+    const pYes = Object.fromEntries(read.reads.map((r) => [r.itemId, maxYes(r)]));
+    const { attributes, trace } = deriveAttributes(checklist, pYes, sheet.excerpt, sheet.id);
+    await repo.upsert("candidates", { ...candidate, attributes });
+
+    const redFlags = checklist.items.filter((it) => it.kind === "red_flag" && (pYes[it.id] ?? 0) >= 0.5);
+    const answers: TypedAnswer[] = checklist.items.map((it) => {
+      const p = pYes[it.id] ?? null;
+      const probabilities: Record<string, number> = p === null ? {} : { yes: p, no: 1 - p };
+      return { questionId: it.id, type: "noul", answer: p === null ? "unknown" : p >= 0.5 ? "yes" : "no", probabilities };
+    });
+    const k: ProductClassification = {
+      id: stableId("cls", candidateId, requirementId, sheet.id, 0),
+      caseId,
+      candidateId,
+      requirementId,
+      answers,
+      concern: redFlags.length > 0,
+      evidenceIds: [sheet.id],
+      source: { provider: "sie-decide", model: read.model, at: new Date().toISOString() },
+    };
+    await repo.upsert("classifications", k);
+    const set = trace.filter((t) => t.result === "set");
+    await audit(repo, {
+      caseId,
+      type: "product.classified",
+      actor: { kind: "tool", id: "sie-decide" },
+      stage: "PRODUCTS_RESEARCHED",
+      subject: { kind: "candidate", id: candidateId },
+      summary: `${set.length} attribute(s) backed by seller quotes${redFlags.length ? `; red flag: ${redFlags.map((r) => r.label).join(", ")}` : ""}.`,
+      data: { classificationId: k.id, trace, failedRequests: read.failedRequests },
+      toolCall: { provider: "sie-decide", operation: "extract", ok: read.failedRequests.length === 0, durationMs: Date.now() - started },
+    });
+    return { concern: k.concern };
   });
 }
 
@@ -656,7 +688,7 @@ export async function evaluateProducts(caseId: string): Promise<CaseState & { el
           stage: "PRODUCTS_RESEARCHED",
           subject: { kind: "candidate", id: cand.id },
           summary: `${d.outcome} for ${req.productType} (${d.engineVersion}).`,
-          data: { decisionId: d.id, ruleResults: d.ruleResults, notes: d.notes, classificationIds: d.classificationIds },
+          data: { decisionId: d.id, ruleResults: d.ruleResults, preferredResults: d.preferredResults, score: d.score, notes: d.notes, classificationIds: d.classificationIds },
         });
       }
     }
@@ -682,8 +714,10 @@ export async function preparePurchase(caseId: string): Promise<{ actionId: strin
       await syncCase(repo, caseId, "preparePurchase", "No eligible products; nothing to prepare.");
       return null;
     }
+    // One product per requirement: the best eligible one by preferred score, then search rank.
+    const selected = selectForPurchase(eligible, await repo.list("candidates", caseId));
     const adapter = getShoppingAdapter(undefined, newId);
-    const action = await adapter.prepare({ caseId, decisions: eligible });
+    const action = await adapter.prepare({ caseId, decisions: selected });
     await repo.upsert("actions", action);
     await audit(repo, {
       caseId,
@@ -692,7 +726,7 @@ export async function preparePurchase(caseId: string): Promise<{ actionId: strin
       stage: "PRODUCTS_EVALUATED",
       subject: { kind: "action", id: action.id },
       summary: `${action.simulated ? "SIMULATED " : ""}${action.type} for ${action.candidateIds.length} product(s).`,
-      data: { candidateIds: action.candidateIds, decisionIds: action.decisionIds },
+      data: { candidateIds: action.candidateIds, decisionIds: action.decisionIds, eligibleAlternatives: eligible.length - selected.length },
     });
     await audit(repo, {
       caseId,

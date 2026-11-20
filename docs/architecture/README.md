@@ -12,13 +12,15 @@ Steady turns one room photo into an approved, evidence-backed shopping action. A
                     │
                     ├─ open questions? ─▶ contextHook ◀── POST /cases/:id/context
                     ▼
-  researchProducts (per requirement) ──▶ Exa search + page text ─▶ ProductCandidate + ProductEvidence
+  researchProducts (per requirement) ──▶ Exa search, shop domains only + structured seller sheet
+                    │                     └─ quotes verified verbatim; single-product pages only ─▶ ProductCandidate + ProductEvidence
                     ▼
-  decideProduct (per candidate) ───────▶ GLiNER2.5 Decide (SIE extract, typed questions) ─▶ ProductClassification
+  decideProduct (per candidate) ───────▶ GLiNER2.5 Decide reads the fitness checklist over the seller sheet
+                    │                     └─ attribute only if GLiNER yes AND a seller quote backs it ─▶ attributes + ProductClassification
                     ▼                     └─ classificationConcern: advisory, can only downgrade
-  evaluateProducts ── rules/engine.ts ─▶ ConstraintDecision (eligible / rejected / needs_verification)
+  evaluateProducts ── rules/engine.ts ─▶ ConstraintDecision (eligible / rejected / needs_verification, preferred score)
                     ▼
-  preparePurchase ── simulated adapter ─▶ ShoppingAction (awaiting_approval)
+  preparePurchase ── best eligible per requirement ─▶ simulated adapter ─▶ ShoppingAction (awaiting_approval)
                     ▼
   approvalHook ◀── POST /cases/:id/actions/:actionId/approval
                     ▼

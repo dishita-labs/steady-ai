@@ -5,12 +5,14 @@
  * made it, so a recommendation can be traced back: photo finding → rule → requirement →
  * evidence → rule results → decision.
  *
- * DRAFT: product types and safety flags are placeholders, and no rule has mandatory
- * constraints yet. With no constraints, every candidate comes out `needs_verification`
- * (see engine.ts). We fill these in once we've looked at real findings and product pages.
+ * Mandatory and preferred constraints come from the product-fitness checklist
+ * (src/lib/product-fitness/checklist.ts, `checklistConstraints`): cited gates such as the
+ * ADA §609.8 250 lb strength for grab bars. The checklist decides which attributes exist;
+ * the rules engine decides eligibility. Context questions are still TODO.
  */
 
 import { stableId } from "../ids";
+import { checklistConstraints } from "../product-fitness/checklist";
 import type {
   CaseId,
   ContextQuestion,
@@ -20,7 +22,7 @@ import type {
   ShoppingRequirement,
 } from "../../types/domain";
 
-export const REQUIREMENT_RULES_VERSION = "req-rules-0.0.1";
+export const REQUIREMENT_RULES_VERSION = "req-rules-0.1.0";
 
 export interface RequirementRule {
   /** Stable ID, recorded on the requirement. */
@@ -49,8 +51,7 @@ export const REQUIREMENT_RULES: RequirementRule[] = [
     searchQuery: "ADA compliant stainless steel bathroom grab bar",
     safetyCritical: true,
     installation: "professional_recommended",
-    mandatory: [], // TODO: e.g. weight rating, length, mount type
-    preferred: [],
+    ...checklistConstraints("grab_bar"),
     questions: [], // TODO: e.g. wall type, stud locations
   },
   {
@@ -60,9 +61,8 @@ export const REQUIREMENT_RULES: RequirementRule[] = [
     searchQuery: "non-slip bath mat with suction cups for bathtub",
     safetyCritical: false,
     installation: "none",
-    mandatory: [],
-    preferred: [],
-    questions: [],
+    ...checklistConstraints("non_slip_bath_mat"),
+    questions: [], // TODO: tub floor smooth or textured (suction mats need smooth)
   },
   {
     id: "R-H11-night-light",
@@ -71,8 +71,7 @@ export const REQUIREMENT_RULES: RequirementRule[] = [
     searchQuery: "motion sensor plug-in LED night light",
     safetyCritical: false,
     installation: "none",
-    mandatory: [],
-    preferred: [],
+    ...checklistConstraints("plug_in_night_light"),
     questions: [],
   },
 ];

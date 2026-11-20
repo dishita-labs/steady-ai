@@ -6,6 +6,8 @@
  * - Any fail → rejected. Otherwise any unknown → needs_verification. Otherwise eligible.
  * - Advisory classifier output can only downgrade eligible → needs_verification.
  *   It can never turn a fail or unknown into a pass.
+ * - Preferred constraints are checked the same way and summed into `score` (their weights).
+ *   They rank eligible candidates; they never change the outcome.
  */
 
 import type {
@@ -21,7 +23,7 @@ import type {
   TypedAnswer,
 } from "../../types/domain";
 
-export const ENGINE_VERSION = "rules-0.2.0";
+export const ENGINE_VERSION = "rules-0.3.0";
 
 /**
  * Deterministic concern policy over Decide answers. DRAFT, to be revisited after evaluation.
@@ -98,6 +100,21 @@ export function evaluateConstraint(c: RequirementConstraint, attributes: Product
   };
 }
 
+/**
+ * Which eligible candidates go into the purchase request: the best one per requirement, by
+ * preferred-constraint score, then search rank. Ineligible decisions are never picked. Pure.
+ */
+export function selectForPurchase(decisions: ConstraintDecision[], candidates: ProductCandidate[]): ConstraintDecision[] {
+  const rank = new Map(candidates.map((c) => [c.id, c.searchRank ?? Number.MAX_SAFE_INTEGER]));
+  const best = new Map<string, ConstraintDecision>();
+  for (const d of decisions.filter((x) => x.outcome === "eligible")) {
+    const cur = best.get(d.requirementId);
+    const better = !cur || (d.score ?? 0) > (cur.score ?? 0) || ((d.score ?? 0) === (cur.score ?? 0) && rank.get(d.candidateId)! < rank.get(cur.candidateId)!);
+    if (better) best.set(d.requirementId, d);
+  }
+  return [...best.values()];
+}
+
 export interface EvaluateInput {
   id: string;
   requirement: ShoppingRequirement;
@@ -129,6 +146,9 @@ export function evaluateCandidate({ id, requirement, candidate, classifications 
     notes.push("Classifier raised a concern; a person should check before selecting.");
   }
 
+  const preferredResults = requirement.preferred.map((c) => evaluateConstraint(c, candidate.attributes));
+  const score = requirement.preferred.reduce((n, c, i) => n + (preferredResults[i].outcome === "pass" ? (c.weight ?? 1) : 0), 0);
+
   if (requirement.safetyCritical) {
     notes.push("Safety-critical item: a photo and a product page can't confirm a safe install. In-person check recommended.");
   }
@@ -143,6 +163,8 @@ export function evaluateCandidate({ id, requirement, candidate, classifications 
     requirementId: requirement.id,
     outcome,
     ruleResults,
+    preferredResults,
+    score,
     evidenceIds: [...new Set(ruleResults.flatMap((r) => (r.evidenceId ? [r.evidenceId] : [])))],
     classificationIds: relevant.map((k) => k.id),
     notes,

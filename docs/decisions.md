@@ -18,13 +18,21 @@ Each decision is short and dated. **Confirmed** means we've decided it. **Open**
 12. **Supply-chain exceptions** (`aube-workspace.yaml`), reviewed and pinned to exact versions: `@vercel/functions@3.11.3`, `@vercel/oidc@4.0.9` and `@vercel/oidc@3.8.10`, `@vercel/cli-config@0.4.0` and `@vercel/cli-config@0.3.1`, `@vercel/cli-exec@1.0.1`, and the ten `@swc/core-*@1.15.3` platform binaries. They come in through `@workflow/*` and have no trusted-publisher provenance. Every other resolved package passed `aube trust check`.
 13. **The app has no auth of its own: it is a frontend that sits behind an auth proxy.** The proxy decides who can reach it, so the app has no token, login or per-user check, and the public case-photo URL (`/cases/:id/photo`) and the approval route are acceptable for now. This only holds while the app is reachable only through the proxy; don't expose it directly.
 14. **SingleStore uses three tables, not one per collection.** The free shared tier allows 10 tables per database and needs the database named at connect time. Per-case collections share `case_items` (keyed by `kind`, with a nullable `status`). `cases` and append-only `audit_events` stay separate. JSONL still writes one file per collection.
+15. **A product attribute needs GLiNER's yes AND a verified seller quote (2026-11-20).** This changes decision 8 for product attributes only; the rules engine still decides, and a missing attribute is still `unknown`.
+    - `researchProducts` searches only the product's shops (`src/lib/product-fitness/shops.ts`) and asks Exa for a structured seller sheet per result. Every sheet quote is kept only if it appears verbatim on the page. Only single-product pages become candidates; the others are audited, never stored.
+    - `decideProduct` has GLiNER read the product-fitness checklist over that sheet, never the whole page (reviews and Q&A caused false readings).
+    - An item writes its attribute only when GLiNER reads yes **and** a sheet quote matches the item's pattern, or, for a number, the parser reads a value from the sheet. The attribute cites the sheet evidence and carries the exact quote. A keyword alone doesn't count ("**Unlike** suction grab bars…"), and neither does GLiNER alone.
+    - Red flags write a failing value into the gate they share (`mount_type = "suction"`), so the engine rejects with the quote as evidence.
+    - The requirement rules' mandatory and preferred constraints are generated from the same checklist (`checklistConstraints`), for example the ADA §609.8 250 lb gate for grab bars.
+    - Preferred constraints are scored by the engine. `preparePurchase` puts one product per requirement into the purchase request: the best score, then search rank.
+    - Evidence and the measured trade-offs: `experiments/product-fitness/README.md`.
 
 ## Open
 
 | Topic | Question | Notes |
 |---|---|---|
-| Typed answers → attributes | Should a Decide "yes" (with what probability, from which chunk) become an evidence-backed `ProductAttribute`, or should attributes come only from parsing page text? | Today nothing produces attributes, so every candidate is `needs_verification` and the approval path isn't reachable with real data |
-| Requirement rules | Mandatory constraints, `decideQuestion`s, and context questions per hazard | `REQUIREMENT_RULES` has three placeholder rules (H09, H10, H11) and no constraints |
+| Requirement context questions | Which context questions each rule asks (wall type for grab bars, smooth or textured tub floor for suction mats), and how answers change constraints | Constraints come from the checklist (decision 15); no rule asks a context question yet |
+| Gold labels for product fitness | Human labels for the product-fitness evaluation | Every product-fitness number so far is against keyword (silver) labels |
 | Context answers → constraints | How an answered `field` (e.g. `wall_type`) changes a requirement's constraints | `applyContextAnswers` records answers only |
 | Decide chunking | Combine answers across 512-token chunks (any-concern? max? per-question?) | Each chunk is its own classification today |
 | Vision prompt and profile | Prompt wording, image resolution profile (`:h100-…-hires`), and max tokens | Measure on the 24 held-out eval images |

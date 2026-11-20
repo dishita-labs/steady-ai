@@ -166,6 +166,10 @@ export interface RequirementConstraint {
    * e.g. "Does the product say it supports at least 250 lb?". Optional.
    */
   decideQuestion?: string;
+  /** Preferred constraints only: ranking weight when it passes (default 1). */
+  weight?: number;
+  /** The product-fitness checklist item this constraint was generated from (src/lib/product-fitness). */
+  checklistItem?: string;
 }
 
 export interface ShoppingRequirement {
@@ -208,6 +212,8 @@ export interface ProductCandidate {
   attributes: ProductAttribute[];
   evidenceIds: EvidenceId[];
   discoveredBy: ProviderRef & { query: string };
+  /** 1-based position in the search results; the last tie-breaker when ranking. */
+  searchRank?: number;
   status: "discovered" | "evaluated" | "selected" | "rejected" | "needs_verification";
 }
 
@@ -216,6 +222,8 @@ export interface ProductAttribute {
   value: ConstraintValue;
   unit?: string;
   evidenceId: EvidenceId;
+  /** The verbatim seller text inside the evidence that this attribute rests on. */
+  quote?: string;
 }
 
 /** A retained piece of source material. Never synthesized; always tied to a URL. */
@@ -283,6 +291,10 @@ export interface ConstraintDecision {
   requirementId: RequirementId;
   outcome: DecisionOutcome;
   ruleResults: RuleResult[];
+  /** Preferred constraints, checked the same way. They rank eligible products; they never gate. */
+  preferredResults?: RuleResult[];
+  /** Sum of the weights of passing preferred constraints. */
+  score?: number;
   /** Every evidence item a rule result relied on. */
   evidenceIds: EvidenceId[];
   /** Advisory classifier outputs that were considered. */

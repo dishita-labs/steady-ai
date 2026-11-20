@@ -14,7 +14,14 @@
  *   gate       must be met. Not stated → needs_verification (never assumed to pass).
  *   red_flag   stated → reject (e.g. a suction-cup "grab bar" that can't carry body weight).
  *   preferred  adds `weight` to the ranking score when met.
+ *
+ * In the workflow (decision 15, docs/decisions.md) each item sets a product ATTRIBUTE (`ATTRIBUTES`
+ * below) only when GLiNER reads yes AND a verified seller quote backs it; the requirement rules'
+ * constraints are generated from the same table (`checklistConstraints`), and the rules engine
+ * decides.
  */
+
+import type { ConstraintValue, RequirementConstraint } from "../../types/domain";
 
 export type ProductType = "grab_bar" | "non_slip_bath_mat" | "plug_in_night_light";
 export type ItemKind = "gate" | "red_flag" | "preferred";
@@ -306,3 +313,80 @@ export const PRODUCT_TYPES = Object.keys(CHECKLISTS) as ProductType[];
 
 export const questionsOf = (it: ChecklistItem): string[] => (Array.isArray(it.question) ? it.question : [it.question]);
 
+/**
+ * The product attribute each item sets in the workflow.
+ *
+ *   value  the attribute value when the item is met; "number" means the value parsed from the
+ *          seller sheet (`extract.ts`, the item's `numeric.quantity`).
+ *   quote  a verified seller quote must match this (non-numeric items). GLiNER's yes alone never
+ *          sets an attribute: the quote is the evidence, GLiNER guards against keyword traps
+ *          ("Unlike suction grab bars…" matches /suction/, GLiNER reads no).
+ *
+ * A red flag writes the SAME attribute as a gate with a failing value (mount_type = "suction"
+ * against mount_type eq "fixed"), so the rules engine rejects it with the quote as evidence.
+ */
+export interface AttributeSpec {
+  name: string;
+  value: ConstraintValue | "number";
+  unit?: string;
+  quote?: RegExp;
+}
+
+const TUB_MAT = /(?:bath|tub|shower)[^\n]{0,40}(?:mat|strips?|treads?|appliqu)|(?:mat|strips?|treads?|appliqu)[^\n]{0,40}(?:bath|tub|shower)/i;
+
+export const ATTRIBUTES: Record<string, AttributeSpec> = {
+  "gb.is_grab_bar": { name: "product_type", value: "grab_bar", quote: /grab ?bar/i },
+  "gb.weight_capacity": { name: "load_lb", value: "number", unit: "lb" },
+  "gb.screw_mounted": { name: "mount_type", value: "fixed", quote: /screws?\b|anchors?\b|securemount|mounting hardware|concealed (?:screw|flange|mount)/i },
+  "gb.suction_mount": { name: "mount_type", value: "suction", quote: /suction/i },
+  "gb.diameter": { name: "diameter_in", value: "number", unit: "in" },
+  "gb.wall_clearance": { name: "wall_clearance_in", value: "number", unit: "in" },
+  "gb.ada_compliant": { name: "ada_compliant", value: true, quote: /\bADA\b/ },
+  "gb.textured_grip": { name: "textured_grip", value: true, quote: /knurl|textured|peened|anti-?slip grip|non-?slip grip|grip pads?/i },
+  "gb.stainless": { name: "stainless_steel", value: true, quote: /stainless/i },
+  "mat.in_tub": { name: "product_type", value: "non_slip_bath_mat", quote: TUB_MAT },
+  "mat.suction_or_adhesive": { name: "grips_tub", value: true, quote: /suction|adhesive|self-?stick|peel and stick/i },
+  "mat.surfaces_listed": { name: "surfaces_listed", value: true, quote: /smooth|textured|non-?textured|tiled?\b|fiberglass|acrylic|porcelain|enamel|refinished/i },
+  "mat.drainage": { name: "drainage_holes", value: true, quote: /drain(?:age)? holes?|drain(?:s)? water|holes? (?:for|to) drain/i },
+  "mat.size_stated": { name: "size_stated", value: true, quote: /\d+(?:\.\d+)?\s*(?:"|in|inch(?:es)?|cm)?\s*(?:x|×|by)\s*\d+/i },
+  "mat.washable": { name: "machine_washable", value: true, quote: /machine[- ]washable|washing machine/i },
+  "mat.slip_test": { name: "slip_test_published", value: true, quote: /NFSI|ASTM|DIN 51097|slip[- ]resistance test|certified slip|coefficient of friction/i },
+  "nl.is_night_light": { name: "product_type", value: "plug_in_night_light", quote: /night ?-?light/i },
+  "nl.automatic": { name: "turns_on_automatically", value: true, quote: /motion|dusk[- ]to[- ]dawn|light sensor|auto(?:matic(?:ally)?)?[- ](?:on|off)|photocell|sensor/i },
+  "nl.motion_sensor": { name: "motion_sensor", value: true, quote: /motion/i },
+  "nl.warm_amber": { name: "warm_light", value: true, quote: /warm white|amber|\b2[0-9]00\s*K\b|soft white|warm light/i },
+  "nl.low_glare": { name: "floor_directed", value: true, quote: /down(?:ward)?[- ]facing|shines? down|floor[- ]level|glare|downlight|lights? (?:up )?the floor/i },
+  "nl.adjustable": { name: "adjustable_brightness", value: true, quote: /adjustable|dimmable|brightness (?:levels?|settings?)|dimmer/i },
+  "nl.safety_listed": { name: "safety_listed", value: true, quote: /\bUL\b|\bETL\b|\bcUL\b/ },
+};
+
+/**
+ * Requirement constraints for a product type, generated from its checklist so the two can't
+ * drift. Gates → mandatory; preferred items → preferred (a numeric range becomes two constraints,
+ * each with half the weight). Red flags produce no constraint of their own: they write a failing
+ * value into a gate's attribute.
+ */
+export function checklistConstraints(productType: ProductType): { mandatory: Omit<RequirementConstraint, "id">[]; preferred: Omit<RequirementConstraint, "id">[] } {
+  const mandatory: Omit<RequirementConstraint, "id">[] = [];
+  const preferred: Omit<RequirementConstraint, "id">[] = [];
+  for (const it of CHECKLISTS[productType].items) {
+    if (it.kind === "red_flag") continue;
+    const a = ATTRIBUTES[it.id];
+    const rationale = `${it.label} (${it.sources[0].title})`;
+    const base = { attribute: a.name, rationale, checklistItem: it.id, ...(a.unit ? { unit: a.unit } : {}) };
+    const out: Omit<RequirementConstraint, "id">[] = [];
+    if (a.value === "number") {
+      const { min, max } = it.numeric!;
+      if (min !== undefined && min === max) out.push({ ...base, op: "eq", value: min });
+      else {
+        if (min !== undefined) out.push({ ...base, op: "gte", value: min });
+        if (max !== undefined) out.push({ ...base, op: "lte", value: max });
+      }
+    } else {
+      out.push({ ...base, op: "eq", value: a.value });
+    }
+    if (it.kind === "gate") mandatory.push(...out);
+    else preferred.push(...out.map((c) => ({ ...c, weight: it.weight / out.length })));
+  }
+  return { mandatory, preferred };
+}

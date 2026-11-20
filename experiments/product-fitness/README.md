@@ -154,8 +154,20 @@ Findings 1–7 are from run 1, the open web with whole pages. Findings 8–12 ar
 
 **Guard against over-fitting:** change a question, threshold or rule only when it fixes errors on gold labels without losing a correct gate. Keep a held-out set of pages (a fresh Exa run with new queries) for one final check.
 
+## In the workflow
+
+Wired on 2026-11-20 (decision 15 in `docs/decisions.md`):
+- `researchProducts` uses the shop domains, the seller sheet and the single-product check.
+- `decideProduct` reads this checklist over the sheet. An attribute is written only when GLiNER says yes **and** a verified seller quote backs it.
+- The requirement rules' constraints come from `checklistConstraints`.
+- `preparePurchase` takes the best eligible product per requirement.
+
+Verified end to end on STD-D03 against the built app (JSONL recorder, 21 s), in a separate jj workspace:
+- 2 hazards → grab bar and mat requirements → 19 single-product pages → 8/9 grab bars and 10/10 mats eligible.
+- A simulated purchase request is waiting for approval: HealthCraft MITER grab bar ("500 lbs", EasyMount anchors) and SlipX extra-long mat ("200+ suction cups … non-textured surfaces").
+- One grab bar needs verification: its sheet never backed the mounting gate.
+
 ## Not done
 
-- No production wiring. `src/lib/rules/requirements.ts` still has no constraints, and `decideProduct` still asks the single suitability question.
 - No price, availability or seller checks.
 - Context questions (tub surface, wall type) aren't connected to items yet.
