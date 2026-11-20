@@ -5,16 +5,17 @@ Each decision is short and dated. **Confirmed** means we've decided it. **Open**
 ## Confirmed (2026-11-20)
 
 1. **Stack:** Workflow SDK (`workflow` 5.7) + Hono, served and built by Nitro 3 (`workflow/nitro` module). TypeScript 6, ESLint (typescript-eslint), Vitest. **aube** for packages. The Next.js app is removed.
-2. **No UI yet.** We monitor runs in the Workflow SDK web UI (`aube run workflow:web`). Datastar is an SSE stub route only; the web app comes later.
-3. **Guild AI is dropped for now.** The Workflow SDK owns orchestration, durable state and the run trace. It can come back later as a boundary.
-4. **Models on Superlinked SIE:** Gemma 4 31B (`google/gemma-4-31B-it`) for vision via `chatCompletions` with a strict JSON schema, and GLiNER2.5 Decide (`fastino/GLiNER2.5-Decide`) for typed decisions via `extract` + `outputSchema`. Both model IDs are configurable through env.
-5. **Recorder chosen by env:** SingleStore when `SINGLESTORE_*` is set, otherwise local JSONL with the same row shape.
-6. **SingleStore client is `mysql2`, not `singlestore-nodejs`.** aube's supply-chain check refused `singlestore-nodejs` (505 weekly downloads, under its 1000 threshold). SingleStore speaks the MySQL wire protocol.
-7. **The rules engine is the authority.** Model outputs are advisory and can only add a concern. A missing attribute is `unknown`, never a pass.
-8. **No purchase without explicit approval.** It goes through the approval hook, then `approve`, then `executeApproved`. Shopping defaults to `SHOPPING_MODE=simulated`.
-9. **Store observable things only:** findings, evidence excerpts with source URLs, tool results, rule results and actions. Never hidden model reasoning.
-10. **Use the hazard taxonomy H01–H11** from the prep work.
-11. **Supply-chain exceptions** (`aube-workspace.yaml`), reviewed and pinned to exact versions: `@vercel/functions@3.11.3`, `@vercel/oidc@4.0.9` and `@vercel/oidc@3.8.10`, `@vercel/cli-config@0.4.0` and `@vercel/cli-config@0.3.1`, `@vercel/cli-exec@1.0.1`, and the ten `@swc/core-*@1.15.3` platform binaries. They come in through `@workflow/*` and have no trusted-publisher provenance. Every other resolved package passed `aube trust check`.
+2. **Secrets come from fnox** (`fnox exec` in the `dev`, `start` and `db:migrate` scripts). `.env` is only for non-secret settings.
+3. **No UI yet.** We monitor runs in the Workflow SDK web UI (`aube run workflow:web`). Datastar is an SSE stub route only; the web app comes later.
+4. **Guild AI is dropped for now.** The Workflow SDK owns orchestration, durable state and the run trace. It can come back later as a boundary.
+5. **Models on Superlinked SIE:** Gemma 4 31B (`google/gemma-4-31B-it`) for vision via `chatCompletions` with a strict JSON schema, and GLiNER2.5 Decide (`fastino/GLiNER2.5-Decide`) for typed decisions via `extract` + `outputSchema`. Both model IDs are configurable through env.
+6. **Recorder chosen by env:** SingleStore when `SINGLESTORE_*` is set, otherwise local JSONL with the same row shape.
+7. **SingleStore client is `mysql2`, not `singlestore-nodejs`.** aube's supply-chain check refused `singlestore-nodejs` (505 weekly downloads, under its 1000 threshold). SingleStore speaks the MySQL wire protocol.
+8. **The rules engine is the authority.** Model outputs are advisory and can only add a concern. A missing attribute is `unknown`, never a pass.
+9. **No purchase without explicit approval.** It goes through the approval hook, then `approve`, then `executeApproved`. Shopping defaults to `SHOPPING_MODE=simulated`.
+10. **Store observable things only:** findings, evidence excerpts with source URLs, tool results, rule results and actions. Never hidden model reasoning.
+11. **Use the hazard taxonomy H01–H11** from the prep work.
+12. **Supply-chain exceptions** (`aube-workspace.yaml`), reviewed and pinned to exact versions: `@vercel/functions@3.11.3`, `@vercel/oidc@4.0.9` and `@vercel/oidc@3.8.10`, `@vercel/cli-config@0.4.0` and `@vercel/cli-config@0.3.1`, `@vercel/cli-exec@1.0.1`, and the ten `@swc/core-*@1.15.3` platform binaries. They come in through `@workflow/*` and have no trusted-publisher provenance. Every other resolved package passed `aube trust check`.
 
 ## Open
 
@@ -42,4 +43,4 @@ Each decision is short and dated. **Confirmed** means we've decided it. **Open**
 
 ## Verified integrations
 
-None yet. A no-keys smoke test (2026-11-20) confirmed the Nitro build, API auth, workflow start, JSONL recording, the failure path (`markFailed`), the Datastar SSE stream and `workflow inspect runs`.
+None yet. A no-keys smoke test (2026-11-20) confirmed the Nitro build, API auth, workflow start, JSONL recording, the failure path (step-level `guarded`), the Datastar SSE stream and `workflow inspect runs`.

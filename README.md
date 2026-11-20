@@ -25,9 +25,10 @@ Uses [aube](https://aube.sh) (`mise install` provides it) and Node ≥ 22.12.
 
 ```bash
 aube install
-cp .env.example .env        # set STEADY_API_TOKEN at least; never commit real values
-aubr dev                    # Nitro dev server on http://localhost:3000
-aubr workflow:web           # Workflow SDK UI: runs, steps, hooks, streams
+fnox check --all            # SIE_API_KEY and EXA_API_KEY come from fnox (keychain)
+cp .env.example .env        # non-secret settings; put STEADY_API_TOKEN in fnox or .env
+aubr dev                    # Nitro dev server on http://localhost:3000 (loads fnox secrets)
+aubr workflow:web           # Workflow SDK UI: runs, steps, hooks, streams (run dev or build first)
 aubr check                  # lint + typecheck + tests
 aubr build                  # production build in .output/
 aubr db:migrate             # apply the SingleStore schema (needs SINGLESTORE_*)

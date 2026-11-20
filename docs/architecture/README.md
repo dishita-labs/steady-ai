@@ -25,7 +25,7 @@ Steady turns one room photo into an approved, evidence-backed shopping action. A
   recordApprovalDecision ── approve() + executeApproved() ─▶ executed (simulated) or declined
 
   Every step: recorder upserts (deterministic IDs) · audit events · syncCase (stage/status) · progress event
-  Any error: markFailed records status=failed, then the run fails visibly in the Workflow UI
+  A step that fails for good (fatal, or last retry) records status=failed and closes the stream, then the run fails visibly
 ```
 
 ## Workflow SDK
@@ -34,7 +34,9 @@ Steady turns one room photo into an approved, evidence-backed shopping action. A
 - `src/workflows/steps.ts` holds the `"use step"` functions. Steps are retried on unhandled errors. Missing configuration (`IntegrationUnavailableError`) and broken model output are fatal, because retrying won't fix them.
 - **Idempotency.** Everything a step writes gets an ID derived from what it is (`stableId`), so a retried step upserts the same rows.
 - **Hooks.** `contextHook` and `approvalHook` (`src/workflows/hooks.ts`) have deterministic tokens built from case and action IDs. The tokens are not credentials, so every `/api` route requires `STEADY_API_TOKEN`.
-- **Monitoring.** Run `aube run workflow:web` to see runs, steps, retries, hooks and stream output. Locally the run state lives in `.workflow-data/`.
+- **Monitoring.** Run `aube run workflow:web` to see runs, steps, retries, hooks and stream output. Locally the run state lives in `.workflow-data/`. The script points the UI at Nitro's manifest (`node_modules/.nitro/workflow/manifest.json`, written by `dev` or `build`) via `WORKFLOW_MANIFEST_PATH`; the UI only looks for Next.js paths by default.
+- **Keep the workflow body free of `try`.** The compiler builds the UI's workflow graph from the `"use workflow"` body and skips `try` blocks. Failure handling lives in each step (`guarded` in `steps.ts`).
+- **Secrets.** `dev`, `start` and `db:migrate` run under `fnox exec`, which loads `SIE_API_KEY` and `EXA_API_KEY` (and anything else added to `fnox.toml`) from the keychain.
 - **Datastar.** `GET /api/runs/:runId/stream` reads the run's progress stream and sends each event as a `datastar-patch-signals` SSE event. It's a stub for the future web app.
 
 ## Case state (`src/lib/case/state.ts`)

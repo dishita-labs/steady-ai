@@ -17,7 +17,6 @@ import {
   decideProduct,
   defineRequirements,
   evaluateProducts,
-  markFailed,
   preparePurchase,
   recordApprovalDecision,
   recordCase,
@@ -33,31 +32,20 @@ export interface CaseRunResult extends CaseState {
 
 export async function steadyCase(input: StartCaseInput): Promise<CaseRunResult> {
   "use workflow";
+  // No try/catch here: the compiler builds the Workflow UI graph from this body and skips
+  // `try` blocks. Each step records its own terminal failure (see `guarded` in ./steps.ts).
+  const { caseId } = input;
   const { workflowRunId } = getWorkflowMetadata();
   await recordCase(input, workflowRunId);
-  try {
-    return await runCase(input);
-  } catch (e) {
-    // Record the failure on the case, then rethrow so the run shows as failed in the Workflow UI.
-    await markFailed(input.caseId, e instanceof Error ? e.message : String(e));
-    throw e;
-  } finally {
-    await closeProgress();
-  }
-}
-
-/** The case pipeline. Called only from `steadyCase`, so it runs inside the workflow sandbox. */
-async function runCase(input: StartCaseInput): Promise<CaseRunResult> {
-  const { caseId } = input;
   await analyzePhoto(caseId, input.image.id);
 
   // Requirements, then wait for the family to answer any open context questions.
   let req = await defineRequirements(caseId);
   let ready = req.requirementIds;
   if (req.openQuestionIds.length > 0) {
-    const token = contextToken(caseId);
-    const answers = contextHook.create({ token });
-    await announceWaiting(caseId, "context", token, `Waiting on ${req.openQuestionIds.length} context question(s).`);
+    const contextHookToken = contextToken(caseId);
+    const answers = contextHook.create({ token: contextHookToken });
+    await announceWaiting(caseId, "context", contextHookToken, `Waiting on ${req.openQuestionIds.length} context question(s).`);
     for await (const payload of answers) {
       const r = await applyContextAnswers(caseId, payload);
       if (r.stillOpen === 0) break;
@@ -66,6 +54,7 @@ async function runCase(input: StartCaseInput): Promise<CaseRunResult> {
     ready = req.requirementIds;
   }
   if (ready.length === 0) {
+    await closeProgress();
     return { caseId, stage: req.stage, status: req.status, outcome: "no_requirements" };
   }
 
@@ -78,14 +67,16 @@ async function runCase(input: StartCaseInput): Promise<CaseRunResult> {
   const evaluated = await evaluateProducts(caseId);
   const prepared = await preparePurchase(caseId);
   if (!prepared) {
+    await closeProgress();
     return { caseId, stage: evaluated.stage, status: evaluated.status, outcome: "nothing_eligible" };
   }
 
   // Nothing is bought without this explicit approval.
-  const token = approvalToken(caseId, prepared.actionId);
-  const approval = approvalHook.create({ token });
-  await announceWaiting(caseId, "approval", token, "Waiting for explicit purchase approval.");
+  const approvalHookToken = approvalToken(caseId, prepared.actionId);
+  const approval = approvalHook.create({ token: approvalHookToken });
+  await announceWaiting(caseId, "approval", approvalHookToken, "Waiting for explicit purchase approval.");
   const decision = await approval;
   const final = await recordApprovalDecision(caseId, { ...decision, actionId: prepared.actionId });
+  await closeProgress();
   return { caseId, ...final, outcome: decision.approved ? "purchase_executed" : "purchase_declined" };
 }
