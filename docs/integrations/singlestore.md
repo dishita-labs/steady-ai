@@ -67,6 +67,6 @@ With `SINGLESTORE_SMOKE=1` and no credentials, the test **fails**. It never skip
    await audit(repo, { id: stableId("evt", "product.classified", k.id), ... });
    ```
    The SingleStore and memory recorders already treat a re-append of the same ID as a no-op.
-2. **JSONL keeps duplicate audit appends.** SingleStore's `PRIMARY KEY (id, case_id)` rejects them, so JSONL records can't be loaded into SingleStore as they are. `tests/boundaries.test.ts:236` currently asserts the duplicate (`toHaveLength(2)`).
+2. **JSONL keeps duplicate audit appends.** SingleStore's `PRIMARY KEY (id, case_id)` rejects them, so JSONL records can't be loaded into SingleStore as they are. `tests/boundaries.test.ts:242` currently asserts the duplicate (`toHaveLength(2)`).
    *Proposed patch:* in `JsonlCaseRepository.appendAudit`, skip when an event with the same ID already exists, and change that assertion to `toHaveLength(1)`.
 3. **Parallel steps can lose a case update.** `researchProducts` runs in parallel per requirement, and each call does a read-modify-write on the `cases` row through `syncCase`. The last writer wins with whatever snapshot it read. Stage and status are re-derived on the next step, so this heals itself, but an intermediate `statusReason` can be lost. No recorder change is needed unless we want optimistic concurrency, for example an `updated_at` check.
