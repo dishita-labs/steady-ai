@@ -91,6 +91,15 @@ describe("scenario D: product-search failure", () => {
     });
     expect(failed(scoreScenario("D", h))).toEqual([]);
   });
+  it("passes when empty results end in an audited escalation (concludeCase)", () => {
+    const h = history((h) => {
+      for (const k of ["candidates", "evidence", "classifications", "decisions"] as const) h.collections[k] = [];
+      h.case = { ...h.case, status: "escalated", statusReason: "No product passed every check (0 need verification, 0 rejected); a person should review them." };
+      h.audit.push(audit("product.searched", { summary: '0 result(s) for "grab bar".', toolCall: { provider: "exa", operation: "search", ok: true } }));
+      h.audit.push(audit("case.status_changed", { summary: "in_progress → escalated (nothing_eligible)" }));
+    });
+    expect(failed(scoreScenario("D", h))).toEqual([]);
+  });
   it("fails on a silent empty result (case still in_progress, nothing audited)", () => {
     const h = history((h) => {
       for (const k of ["candidates", "evidence", "classifications", "decisions"] as const) h.collections[k] = [];

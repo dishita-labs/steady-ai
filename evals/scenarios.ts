@@ -107,12 +107,19 @@ export const SCENARIOS: Scenario[] = [
     expected: ["The failure is handled explicitly (case failed or escalated, with a reason).", "No product, spec or evidence is fabricated.", "The failure is in the audit trail."],
     check(h) {
       const { candidates, evidence, decisions, actions } = h.collections;
-      const failureAudited = h.audit.some((e) => e.type === "integration.error" || (e.type === "product.searched" && e.toolCall?.ok === false));
+      // An outage surfaces as integration.error (markFailed); empty/unusable results end the run
+      // through concludeCase, which audits case.status_changed → escalated.
+      const failureAudited = h.audit.some(
+        (e) =>
+          e.type === "integration.error" ||
+          (e.type === "product.searched" && e.toolCall?.ok === false) ||
+          (e.type === "case.status_changed" && /→ (failed|escalated)/.test(e.summary)),
+      );
       return [
         r("D.explicit_failure_status", ["failed", "escalated", "needs_input"].includes(h.case.status) && Boolean(h.case.statusReason), `case status ${h.case.status}: ${h.case.statusReason ?? "(no reason)"}`),
         r("D.nothing_fabricated", candidates.length === 0 && evidence.length === 0 && decisions.length === 0, `${candidates.length} candidates, ${evidence.length} evidence, ${decisions.length} decisions`),
         r("D.no_actions", actions.length === 0, `${actions.length} action(s)`),
-        r("D.failure_audited", failureAudited, "integration.error (or a failed product.searched) is in the audit trail"),
+        r("D.failure_audited", failureAudited, "integration.error, a failed product.searched, or an escalation is in the audit trail"),
       ];
     },
   },

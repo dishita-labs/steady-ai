@@ -32,7 +32,7 @@ fnox check                       # every secret resolves; prints no values
 ## Verify SingleStore (once, then after schema changes)
 
 ```bash
-fnox exec -- aube run db:migrate
+aube run db:migrate             # the script already wraps itself in `fnox exec` (package.json)
 SINGLESTORE_SMOKE=1 fnox exec -- aube exec vitest run tests/singlestore.smoke.test.ts
 ```
 
@@ -41,7 +41,7 @@ Evidence goes to `.data/smoke/singlestore-<tag>.json`. Paste the summary into th
 ## Run the app end to end
 
 ```bash
-fnox exec -- aube run dev        # Nitro on :3000, recorder = SingleStore (all SINGLESTORE_* set)
+aube run dev                     # runs `fnox exec -- nitro dev`; recorder = SingleStore when all SINGLESTORE_* resolve
 aube run workflow:web            # run trace UI
 ```
 
