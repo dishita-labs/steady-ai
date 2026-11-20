@@ -2,5 +2,5 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
-  test: { include: ["experiments/hazard-classification/run.experiment.ts"], environment: "node", reporters: ["default"] },
+  test: { include: ["experiments/hazard-classification/*.experiment.ts"], environment: "node", reporters: ["default"] },
 });
