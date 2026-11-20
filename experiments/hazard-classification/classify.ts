@@ -1,79 +1,82 @@
 /**
- * Stage 2: GLiNER2.5 Decide maps each Gemma observation to H01–H11, one observation at a time.
+ * Stage 2: GLiNER2.5 Decide labels Gemma's structure parts and items. ONE `noul` (yes/no)
+ * question per call, always phrased POSITIVELY ("Is this a handrail?").
  *
- * GLiNER never sees the image, only one observation's text, so every label it gives is tied to a
- * specific observation id by construction and it cannot cite an observation that doesn't exist.
- * Each category is a 4-way `choice`, not a yes/no, so "no" never silently becomes "absent":
- *   hazard     the observation describes the hazard condition
- *   no_hazard  the observation describes the area and the condition is not there
- *   unclear    the observation is about the area but doesn't say enough
- *   unrelated  the observation is not about the area
+ * Why this shape (probes, 2026-11-20, experiments/hazard-classification/probe.experiment.ts):
+ *   - Grouped 4-way `choice` questions gave near-uniform probabilities (~0.3 each) and nonsense
+ *     reads (a window as evidence of a clear floor).
+ *   - Decide can't read negation: "There is no handrail" vs "handrails not mentioned" both → no,
+ *     and "without a handrail?" was answered YES (0.95) for handrails on both sides.
+ *   - Positive yes/no questions were sharp: "mentions a handrail?" 1.0 vs 0.0.
+ * So GLiNER answers only "is this structure X?", "is this part X?" and "is this item Y?". A part
+ * can take a stair/bath/bed role only if its structure is one (a bathtub's "right side" read as a
+ * stair side on 2026-11-20 without this gate). Absence comes from Gemma's
+ * explicit empty `items` lists, and validate.ts turns the reads into labels.
  *
- * Reuses the production Decide adapter (`getProductDecider`, src/lib/product-decisions) unchanged.
- * Its generic `decide({ text, questions })` call is not product-specific.
+ * GLiNER never sees the image. Every read is tied to an observation id and part index.
+ * Reads are stored as raw P(yes), so thresholds can be tuned later without new calls.
+ * Uses the production Decide adapter (`getProductDecider`, src/lib/product-decisions) unchanged.
  */
 
-import { getProductDecider, type DecideQuestion } from "../../src/lib/product-decisions";
-import type { HazardCategoryId, TypedAnswer } from "../../src/types/domain";
-import { CATEGORY_SPECS, QUESTION_GROUPS } from "./definitions";
-import type { Observation, ObservationOutput } from "./observe";
+import { getProductDecider } from "../../src/lib/product-decisions";
+import { ITEM_TYPES, PART_ROLES, type ItemType, type PartRole } from "./definitions";
+import type { ObservationOutput } from "./observe";
 
-export const CHOICE_LABELS = ["hazard", "no_hazard", "unclear", "unrelated"] as const;
-export type ChoiceLabel = (typeof CHOICE_LABELS)[number];
+/** Roles and item types GLiNER is asked about (`other` is what's left when none says yes). */
+export const ASKED_ROLES = (Object.keys(PART_ROLES) as PartRole[]).filter((r) => r !== "other");
+export const ASKED_ITEM_TYPES = (Object.keys(ITEM_TYPES) as ItemType[]).filter((t) => t !== "other" && t !== "fixture");
+/** Structure gate: a part may take a stair/bath/bed role only if its structure is one. */
+export const STRUCTURE_QUESTIONS = {
+  stairs: "Is this a staircase or steps?",
+  bath: "Is this a bathtub, shower or toilet?",
+  bed: "Is this a bed?",
+} as const;
+export type Structure = keyof typeof STRUCTURE_QUESTIONS;
+export const ROLE_NEEDS: Partial<Record<PartRole, Structure>> = {
+  stair_side: "stairs",
+  stair_treads: "stairs",
+  bath_wall: "bath",
+  bath_floor: "bath",
+  bedside: "bed",
+};
 
-/**
- * Decide reads text and questions in one 512-token window. ~4 characters per token; this budget
- * leaves headroom. Calls over it are not sent (recorded as invalid) rather than truncated.
- */
-export const CALL_CHAR_BUDGET = 1800;
+export const STAIR_CONDITION_QUESTION = "Does this describe a broken, missing or uneven step, or torn or lifted carpet on stairs?";
 
-export function observationText(o: Observation, roomType: string): string {
-  const parts = [`Room: ${roomType}.`, `${o.feature}: ${o.description}`, `Location: ${o.location}.`, `Visibility: ${o.visibility}.`];
-  if (o.limitations.length) parts.push(`Not shown: ${o.limitations.join("; ")}.`);
-  return parts.join(" ");
+export const roleQuestion = (r: PartRole) => `Is this ${PART_ROLES[r]}?`;
+export const itemQuestion = (t: ItemType) => `Is this ${ITEM_TYPES[t]}?`;
+export const partText = (feature: string, part: string) => `${feature}: ${part}`;
+
+/** P(yes), or null when the call failed. */
+export type PYes = number | null;
+
+export interface ItemRead {
+  text: string;
+  types: Partial<Record<ItemType, PYes>>;
 }
 
-export function categoryQuestion(id: HazardCategoryId): DecideQuestion {
-  const s = CATEGORY_SPECS[id];
-  return {
-    type: "choice",
-    instructions: `What does this observation say about ${s.area}?`,
-    criteria: {
-      hazard: s.hazard,
-      no_hazard: s.clear,
-      unclear: `It is about ${s.area} but does not say enough to tell.`,
-      unrelated: `It is not about ${s.area}.`,
-    },
-  };
-}
-
-export function groupQuestions(group: HazardCategoryId[]): Record<string, DecideQuestion> {
-  return Object.fromEntries(group.map((id) => [id, categoryQuestion(id)]));
-}
-
-export function callSize(text: string, questions: Record<string, DecideQuestion>): number {
-  return text.length + JSON.stringify(questions).length;
-}
-
-export interface ObservationCategoryAnswer {
+export interface PartRead {
   observationId: string;
-  category: HazardCategoryId;
-  /** "invalid" when the call failed, was over budget, or returned an unknown label. */
-  label: ChoiceLabel | "invalid";
-  probabilities: Record<string, number>;
+  partIndex: number;
+  part: string;
+  visibility: "full" | "partial" | "obscured";
+  roles: Partial<Record<PartRole, PYes>>;
+  items: ItemRead[];
 }
 
 export interface ClassifyCall {
-  observationId: string;
-  group: HazardCategoryId[];
-  chars: number;
+  text: string;
+  question: string;
   ok: boolean;
+  pYes: PYes;
   error?: string;
-  answers?: TypedAnswer[];
 }
 
 export interface ClassifyResult {
-  answers: ObservationCategoryAnswer[];
+  parts: PartRead[];
+  /** Per observation that has parts: P(yes) that its description reports damaged steps. */
+  stairCondition: Record<string, PYes>;
+  /** Per observation that has parts: P(yes) it is each structure. */
+  structures: Record<string, Partial<Record<Structure, PYes>>>;
   calls: ClassifyCall[];
 }
 
@@ -93,25 +96,39 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R
 
 export async function classifyObservations(obs: ObservationOutput, concurrency = 4): Promise<ClassifyResult> {
   const decider = getProductDecider();
-  const jobs = obs.observations.flatMap((o) => QUESTION_GROUPS.map((group) => ({ o, group })));
-  const calls = await mapLimit(jobs, concurrency, async ({ o, group }): Promise<ClassifyCall> => {
-    const text = observationText(o, obs.roomType);
-    const questions = groupQuestions(group);
-    const chars = callSize(text, questions);
-    if (chars > CALL_CHAR_BUDGET) return { observationId: o.id, group, chars, ok: false, error: `over budget (${chars} > ${CALL_CHAR_BUDGET} chars)` };
+  const ask = async (text: string, question: string): Promise<ClassifyCall> => {
     try {
-      const res = await decider.decide({ text, questions });
-      return { observationId: o.id, group, chars, ok: true, answers: res.answers };
+      const res = await decider.decide({ text, questions: { q: { type: "noul", instructions: question } } });
+      const p = res.answers[0]?.probabilities.yes;
+      return { text, question, ok: typeof p === "number", pYes: typeof p === "number" ? p : null, error: typeof p === "number" ? undefined : "no probability in reply" };
     } catch (e) {
-      return { observationId: o.id, group, chars, ok: false, error: e instanceof Error ? e.message : String(e) };
+      return { text, question, ok: false, pYes: null, error: e instanceof Error ? e.message : String(e) };
     }
+  };
+
+  // One job per (text, question); identical items across parts share a call via the recorder cache.
+  type Job = { text: string; question: string; set: (p: PYes) => void };
+  const jobs: Job[] = [];
+  const parts: PartRead[] = [];
+  const stairCondition: Record<string, PYes> = {};
+  const structures: Record<string, Partial<Record<Structure, PYes>>> = {};
+  for (const o of obs.observations) {
+    if (!o.parts.length) continue;
+    const whole = `${o.feature}: ${o.description}`;
+    jobs.push({ text: whole, question: STAIR_CONDITION_QUESTION, set: (p) => (stairCondition[o.id] = p) });
+    const st = (structures[o.id] = {} as Partial<Record<Structure, PYes>>);
+    for (const k of Object.keys(STRUCTURE_QUESTIONS) as Structure[]) jobs.push({ text: whole, question: STRUCTURE_QUESTIONS[k], set: (p) => (st[k] = p) });
+    o.parts.forEach((p, partIndex) => {
+      const read: PartRead = { observationId: o.id, partIndex, part: p.part, visibility: p.visibility, roles: {}, items: p.items.map((text) => ({ text, types: {} })) };
+      parts.push(read);
+      for (const r of ASKED_ROLES) jobs.push({ text: partText(o.feature, p.part), question: roleQuestion(r), set: (x) => (read.roles[r] = x) });
+      for (const it of read.items) for (const t of ASKED_ITEM_TYPES) jobs.push({ text: it.text, question: itemQuestion(t), set: (x) => (it.types[t] = x) });
+    });
+  }
+  const calls = await mapLimit(jobs, concurrency, async (j) => {
+    const c = await ask(j.text, j.question);
+    j.set(c.pYes);
+    return c;
   });
-  const answers = calls.flatMap((c) =>
-    c.group.map((category): ObservationCategoryAnswer => {
-      const a = c.answers?.find((x) => x.questionId === category);
-      const label = a && (CHOICE_LABELS as readonly string[]).includes(a.answer) ? (a.answer as ChoiceLabel) : "invalid";
-      return { observationId: c.observationId, category, label, probabilities: a?.probabilities ?? {} };
-    }),
-  );
-  return { answers, calls };
+  return { parts, stairCondition, structures, calls };
 }

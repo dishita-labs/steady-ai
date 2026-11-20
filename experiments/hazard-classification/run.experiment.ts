@@ -68,18 +68,18 @@ it.skipIf(process.env.HAZARD_EXPERIMENT !== "1")("hazard classification experime
       const live = calls.every((c) => !c.cached);
       tCls = live ? Math.round(performance.now() - t0) : calls.reduce((n, c) => n + c.latencyMs, 0);
       s.observations = o.output;
-      s.answers = cls.answers;
+      s.classified = { parts: cls.parts, stairCondition: cls.stairCondition, structures: cls.structures };
       s.latencyMs = tObs + tCls;
       const { result } = predict(s, DEFAULT_VALIDATOR);
       Object.assign(out, {
         observations: o.output,
-        answers: cls.answers,
+        classified: { parts: cls.parts, stairCondition: cls.stairCondition, structures: cls.structures },
         classifyCalls: cls.calls,
-        invalidClassifications: cls.answers.filter((x) => x.label === "invalid").length,
+        failedClassifications: cls.calls.filter((c) => !c.ok).length,
+        roles: result!.roles,
         labels: result!.categoryLabels,
         trace: result!.trace,
         findings: result!.findings,
-        downgradedHazardReads: result!.downgradedHazardReads,
         problems: [...validateVisionResult(result!), ...traceProblems(result!, o.output)],
         latencyMs: {
           observe: tObs,
@@ -110,7 +110,7 @@ it.skipIf(!process.env.HAZARD_RESCORE)("re-score a finished run across validator
   const stored: StoredImage[] = [];
   for (const f of files) {
     const j = JSON.parse(await readFile(join(dir, "images", f), "utf8"));
-    stored.push({ imageId: j.imageId, gt: j.gt, observations: j.observations, answers: j.answers, latencyMs: j.latencyMs?.total ?? 0 });
+    stored.push({ imageId: j.imageId, gt: j.gt, observations: j.observations, classified: j.classified, latencyMs: j.latencyMs?.total ?? 0 });
   }
   const table = renderSweep(sweep(stored));
   await writeFile(join(dir, `tuning-${new Date().toISOString().replace(/[:.]/g, "-")}.md`), `# Threshold sweep: ${dir}\n\n${table}\n`);

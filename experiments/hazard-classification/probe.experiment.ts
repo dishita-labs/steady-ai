@@ -5,11 +5,12 @@
  *   HAZARD_PROBE=1 fnox exec -- aube exec vitest run --config experiments/hazard-classification/vitest.config.mts
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { it } from "vitest";
 import { getProductDecider, type DecideQuestion } from "../../src/lib/product-decisions";
-import { categoryQuestion } from "./classify";
+import { loadDevelopmentSet, mimeTypeFor } from "./dataset";
+import { observe } from "./observe";
 import { installRecorder } from "./record";
 
 const OUT = join(".data", "experiments", "hazard-classification");
@@ -22,7 +23,19 @@ const TEXTS: Record<string, { text: string; expect: string }> = {
 };
 
 const FORMATS: Record<string, Record<string, DecideQuestion>> = {
-  choice_described: { H02: categoryQuestion("H02") },
+  // Round-1 format, as it was (grouped 4-way choice with described criteria).
+  choice_described: {
+    H02: {
+      type: "choice",
+      instructions: "What does this observation say about the sides of stairs or steps?",
+      criteria: {
+        hazard: "A side of the stairs or steps has no handrail, or there is a handrail on only one side.",
+        no_hazard: "Both sides of the stairs or steps are described and each has a handrail.",
+        unclear: "It is about the sides of stairs or steps but does not say enough to tell.",
+        unrelated: "It is not about the sides of stairs or steps.",
+      },
+    },
+  },
   choice_labels: { H02: { type: "choice", instructions: "What does this text say about handrails on the stairs or steps?", criteria: ["no handrail on a side", "handrails on both sides", "handrails not mentioned", "not about stairs"] } },
   noul: {
     about: { type: "noul", instructions: "Is this text about stairs or steps?" },
@@ -45,6 +58,22 @@ const NEGATION_FORMATS: Record<string, Record<string, DecideQuestion>> = {
   noul_without: { q: { type: "noul", instructions: "Are the stairs or steps without a handrail on at least one side?" } },
   noul_present: { q: { type: "noul", instructions: "Does the text mention a handrail, railing or banister?" } },
 };
+
+/** Observation-only probe: what does the current Gemma prompt return for a few dev images? */
+it.skipIf(!process.env.HAZARD_PROBE_OBSERVE)("Gemma observation probe", { timeout: 10 * 60 * 1000 }, async () => {
+  installRecorder(join(OUT, "cache"));
+  const dev = await loadDevelopmentSet();
+  for (const id of process.env.HAZARD_PROBE_OBSERVE!.split(",")) {
+    const img = dev.find((d) => d.imageId === id.trim());
+    if (!img) throw new Error(`${id} is not a development image.`);
+    const o = await observe({ bytes: new Uint8Array(await readFile(img.file)), mimeType: mimeTypeFor(img.file), room: img.room });
+    console.log(`== ${img.imageId} ok=${o.ok} ${o.error ?? ""}`);
+    for (const x of o.output?.observations ?? []) {
+      console.log(`${x.id} [${x.visibility}] ${x.feature}: ${x.description}`);
+      for (const p of x.parts) console.log(`    - ${p.part} [${p.visibility}]: ${JSON.stringify(p.items)}`);
+    }
+  }
+});
 
 it.skipIf(process.env.HAZARD_PROBE !== "1")("GLiNER format probe", { timeout: 10 * 60 * 1000 }, async () => {
   installRecorder(join(OUT, "cache"));

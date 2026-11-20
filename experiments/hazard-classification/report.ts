@@ -20,7 +20,7 @@ export function renderReport(s: Summary): string {
     `# Hazard classification experiment: ${s.run}`,
     "",
     `Development images only (${s.images.length}): ${s.images.join(", ")}. Pipeline: Gemma observations → GLiNER2.5 Decide → validation.`,
-    `Validator thresholds: P(hazard) ≥ ${s.validator.minHazardProbability}, P(no_hazard) ≥ ${s.validator.minClearProbability}.`,
+    `Validator thresholds: GLiNER yes if P(yes) ≥ ${s.validator.minYes}, no if P(yes) < ${s.validator.noBelow}.`,
     "Scoring: steady-prep/docs/evaluation-methodology.md §3–4. Counts, not rates; 'undefined' means no examples.",
     "",
     "| Metric | Value |",

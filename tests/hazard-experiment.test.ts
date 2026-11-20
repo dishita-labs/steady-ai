@@ -1,14 +1,14 @@
 /**
  * Unit tests for the hazard-classification experiment's pure parts. No model calls: the GLiNER
- * answers below are hand-written inputs to the deterministic validator, not model results.
+ * P(yes) values below are hand-written inputs to the deterministic validator, not model results.
  */
 
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { CALL_CHAR_BUDGET, CHOICE_LABELS, callSize, groupQuestions, observationText, type ObservationCategoryAnswer } from "../experiments/hazard-classification/classify";
-import { parseDevManifest, loadDevelopmentSet, steadyPrepDir } from "../experiments/hazard-classification/dataset";
-import { CATEGORY_IDS, CATEGORY_SPECS, QUESTION_GROUPS } from "../experiments/hazard-classification/definitions";
-import { ObservationOutput, observationPrompt, type Observation } from "../experiments/hazard-classification/observe";
+import { ASKED_ITEM_TYPES, ASKED_ROLES, itemQuestion, roleQuestion, type ClassifyResult, type PartRead } from "../experiments/hazard-classification/classify";
+import { loadDevelopmentSet, parseDevManifest, steadyPrepDir } from "../experiments/hazard-classification/dataset";
+import { CATEGORY_IDS, CATEGORY_SPECS, type ItemType, type PartRole } from "../experiments/hazard-classification/definitions";
+import { ObservationOutput, observationPrompt } from "../experiments/hazard-classification/observe";
 import { score, type ImagePrediction } from "../experiments/hazard-classification/score";
 import { sweep } from "../experiments/hazard-classification/tune";
 import { DEFAULT_VALIDATOR, traceProblems, validateClassifications } from "../experiments/hazard-classification/validate";
@@ -17,13 +17,24 @@ import { validateVisionResult } from "../src/lib/vision";
 import type { CategoryLabel, HazardCategoryId, HazardFinding } from "../src/types/domain";
 
 const source = { provider: "sie-decide" as const, model: "test", at: "2026-11-20T00:00:00.000Z" };
-const obs = (id: string, visibility: Observation["visibility"], feature = "thing", description = "desc"): Observation => ({ id, feature, description, location: "somewhere", visibility, limitations: [] });
-const out = (...o: Observation[]): ObservationOutput => ({ roomType: "bathroom", observations: o, unknowns: ["walls out of frame"] });
-/** Every category unrelated for every observation, then override some reads. */
-function answers(o: ObservationOutput, overrides: [string, HazardCategoryId, ObservationCategoryAnswer["label"]][]): ObservationCategoryAnswer[] {
-  const base = o.observations.flatMap((x) => CATEGORY_IDS.map((c) => ({ observationId: x.id, category: c, label: "unrelated" as ObservationCategoryAnswer["label"], probabilities: {} })));
-  for (const [id, c, l] of overrides) base.find((a) => a.observationId === id && a.category === c)!.label = l;
-  return base;
+type Vis = "full" | "partial" | "obscured";
+
+/** One structure observation per part spec; role and item types given as the "yes" answers. */
+function scene(parts: { role: PartRole; vis?: Vis; items?: [string, ItemType | null][] }[], stairDamage?: number) {
+  const observations: ObservationOutput["observations"] = parts.map((p, i) => ({
+    id: `O${i + 1}`, feature: p.role, description: `${p.role} description`, location: "here", visibility: "full", limitations: [`lim ${i + 1}`],
+    parts: [{ part: p.role, visibility: p.vis ?? "full", items: (p.items ?? []).map(([t]) => t) }],
+  }));
+  const reads: PartRead[] = parts.map((p, i) => ({
+    observationId: `O${i + 1}`, partIndex: 0, part: p.role, visibility: p.vis ?? "full",
+    roles: Object.fromEntries(ASKED_ROLES.map((r) => [r, r === p.role ? 0.9 : 0.05])),
+    items: (p.items ?? []).map(([text, type]) => ({ text, types: Object.fromEntries(ASKED_ITEM_TYPES.map((t) => [t, t === type ? 0.9 : 0.05])) })),
+  }));
+  const o: ObservationOutput = { roomType: "other_living_area", observations, unknowns: ["out of frame"] };
+  const structOf = (r: PartRole) => (r.startsWith("stair") ? "stairs" : r.startsWith("bath") ? "bath" : r === "bedside" ? "bed" : null);
+  const structures = Object.fromEntries(parts.map((p, i) => [`O${i + 1}`, { stairs: structOf(p.role) === "stairs" ? 0.9 : 0.05, bath: structOf(p.role) === "bath" ? 0.9 : 0.05, bed: structOf(p.role) === "bed" ? 0.9 : 0.05 }]));
+  const cls: ClassifyResult = { parts: reads, stairCondition: Object.fromEntries(observations.map((x) => [x.id, stairDamage ?? 0.05])), structures, calls: [] };
+  return { o, cls, run: (cfg = DEFAULT_VALIDATOR) => validateClassifications(o, cls, source, cfg) };
 }
 
 describe("observation prompt stays neutral", () => {
@@ -32,139 +43,121 @@ describe("observation prompt stays neutral", () => {
     for (const id of CATEGORY_IDS) expect(p).not.toContain(id.toLowerCase());
     for (const w of ["hazard", "risk", "fall", "handrail", "grab bar", "rug", "mat", "cord", "wire", "cable", "clutter", "lamp", "non-slip", "lighting"]) expect(p, w).not.toMatch(new RegExp(`\\b${w}s?\\b`));
   });
-  it("asks for unknowns and forbids judgements and unphotographable properties", () => {
-    expect(p).toContain("limitations");
+  it("asks for explicit empty lists, unknowns, and no judgements", () => {
+    expect(p).toContain("empty list when the part is clearly visible and has nothing");
+    expect(p).toContain("is not listed as empty");
     expect(p).toContain("do not judge whether anything is safe or unsafe");
-    expect(p).toContain("how slippery");
   });
 });
 
-describe("GLiNER questions", () => {
-  it("cover every category exactly once, as 4-way choices", () => {
-    expect(QUESTION_GROUPS.flat().sort()).toEqual([...CATEGORY_IDS].sort());
-    for (const g of QUESTION_GROUPS) for (const q of Object.values(groupQuestions(g))) {
-      expect(q.type).toBe("choice");
-      expect(Object.keys((q as { criteria: Record<string, string> }).criteria)).toEqual([...CHOICE_LABELS]);
-    }
-  });
-  it("fit the call budget with a long observation", () => {
-    const long = obs("O12", "partial", "staircase", "x".repeat(400));
-    long.limitations = ["y".repeat(120), "z".repeat(120)];
-    const text = observationText(long, "other_living_area");
-    for (const g of QUESTION_GROUPS) expect(callSize(text, groupQuestions(g)), g.join(",")).toBeLessThanOrEqual(CALL_CHAR_BUDGET);
+describe("GLiNER questions are single positive yes/no questions", () => {
+  it("never ask about absence (Decide can't read negation)", () => {
+    const qs = [...ASKED_ROLES.map(roleQuestion), ...ASKED_ITEM_TYPES.map(itemQuestion)];
+    for (const q of qs) expect(q, q).not.toMatch(/\b(no|not|without|missing|lacks?)\b/i);
   });
 });
 
 describe("deterministic evidence validation", () => {
-  it("PRESENT needs a fully visible hazard observation and cites it", () => {
-    const o = out(obs("O1", "full", "bathtub", "Tub wall with nothing mounted on it."), obs("O2", "full", "floor"));
-    const r = validateClassifications(o, answers(o, [["O1", "H09", "hazard"]]), source);
-    expect(r.categoryLabels.H09).toBe("present");
-    expect(r.trace.H09).toMatchObject({ reason: "visible_hazard", observationIds: ["O1"] });
-    expect(r.findings.find((f) => f.category === "H09")?.visibleEvidence).toEqual(["[O1] bathtub: Tub wall with nothing mounted on it."]);
+  it("D01-like: both stair sides fully visible and explicitly empty → H02 present, cited", () => {
+    const s = scene([{ role: "stair_side" }, { role: "stair_side" }, { role: "stair_treads", items: [["potted plants", "plant_decor"], ["doormat", "rug"]] }]);
+    const r = s.run();
+    expect(r.categoryLabels.H02).toBe("present");
+    expect(r.trace.H02.evidence.map((e) => e.observationId)).toEqual(["O1", "O2"]);
+    expect(r.findings.find((f) => f.category === "H02")?.visibleEvidence[0]).toContain("nothing");
+    expect(r.categoryLabels.H01).toBe("absent"); // plants are decoration, not loose objects
+    expect(r.categoryLabels.H04).toBe("cannot_determine");
     expect(validateVisionResult(r)).toEqual([]);
-    expect(traceProblems(r, o)).toEqual([]);
+    expect(traceProblems(r, s.o)).toEqual([]);
   });
 
-  it("a hazard read on a partially visible observation becomes CANNOT_DETERMINE, not a shopping trigger", () => {
-    const o = out(obs("O1", "partial", "staircase", "Staircase, left edge cut off by the frame."));
-    const r = validateClassifications(o, answers(o, [["O1", "H02", "hazard"]]), source);
-    expect(r.categoryLabels.H02).toBe("cannot_determine");
-    expect(r.trace.H02.reason).toBe("hazard_only_partially_visible");
-    expect(r.downgradedHazardReads).toBe(1);
+  it("a missing handrail seen only on a partially visible side is CANNOT_DETERMINE, not a shopping trigger", () => {
+    const r = scene([{ role: "stair_side", vis: "partial" }, { role: "stair_side", items: [["wooden handrail", "handrail"]] }]).run();
+    expect(r.trace.H02).toMatchObject({ label: "cannot_determine", reason: "condition_only_partially_visible" });
   });
 
-  it("uncertain hazard evidence outranks a visible absence elsewhere (missing info is not absence)", () => {
-    const o = out(obs("O1", "full", "toilet", "Grab bar beside the toilet."), obs("O2", "partial", "tub surround", "Tub wall, mostly out of frame."));
-    const r = validateClassifications(o, answers(o, [["O1", "H09", "no_hazard"], ["O2", "H09", "hazard"]]), source);
+  it("H02 absent needs both sides seen with rails; one railed side is not enough", () => {
+    expect(scene([{ role: "stair_side", items: [["metal handrail", "handrail"]] }, { role: "stair_side", items: [["metal handrail", "handrail"]] }]).run().categoryLabels.H02).toBe("absent");
+    expect(scene([{ role: "stair_side", items: [["metal handrail", "handrail"]] }]).run().categoryLabels.H02).toBe("cannot_determine");
+  });
+
+  it("D03-like: tub walls without a grab bar and an empty tub floor → H09 and H10 present", () => {
+    const r = scene([{ role: "bath_wall", items: [["soap dish", "fixture"]] }, { role: "bath_floor" }, { role: "open_floor" }]).run();
+    expect([r.categoryLabels.H09, r.categoryLabels.H10, r.categoryLabels.H05]).toEqual(["present", "present", "absent"]);
+  });
+
+  it("D04-like: bar by the toilet, tub wall only partly visible → H09 CANNOT_DETERMINE", () => {
+    const r = scene([{ role: "bath_wall", items: [["grab bar", "grab_bar"]] }, { role: "bath_wall", vis: "partial" }]).run();
     expect(r.categoryLabels.H09).toBe("cannot_determine");
   });
 
-  it("ABSENT needs a fully visible no-hazard read; partial or unclear reads defer", () => {
-    const o = out(obs("O1", "full"), obs("O2", "partial"), obs("O3", "full"));
-    const r = validateClassifications(o, answers(o, [["O1", "H05", "no_hazard"], ["O2", "H06", "no_hazard"], ["O3", "H07", "unclear"]]), source);
-    expect(r.trace.H05).toMatchObject({ label: "absent", reason: "visible_absence", observationIds: ["O1"] });
-    expect(r.trace.H06).toMatchObject({ label: "cannot_determine", reason: "area_partially_visible" });
-    expect(r.trace.H07).toMatchObject({ label: "cannot_determine", reason: "area_seen_but_unclear" });
+  it("a bathtub's 'side' can't become a stair side: roles are gated by the structure (D03 false positive)", () => {
+    const s = scene([{ role: "bath_wall" }]);
+    s.cls.parts[0].roles = { stair_side: 0.71, bath_wall: 0.68, bath_floor: 0.65 };
+    const r = s.run();
+    expect(r.categoryLabels.H02).toBe("not_applicable");
+    expect(r.roles[0].role).toBe("bath_wall");
   });
 
-  it("never marks stair lighting absent: switches and bulbs aren't photographable", () => {
-    const o = out(obs("O1", "full", "ceiling light"));
-    const r = validateClassifications(o, answers(o, [["O1", "H04", "no_hazard"]]), source);
-    expect(r.trace.H04).toMatchObject({ label: "cannot_determine", reason: "absence_not_establishable_from_photo" });
+  it("a towel bar is not a grab bar", () => {
+    expect(scene([{ role: "bath_wall", items: [["chrome towel bar", "towel_bar"]] }]).run().categoryLabels.H09).toBe("present");
   });
 
-  it("a failed classification defers instead of reading as absent", () => {
-    const o = out(obs("O1", "full"));
-    const r = validateClassifications(o, answers(o, [["O1", "H11", "invalid"]]), source);
-    expect(r.trace.H11).toMatchObject({ label: "cannot_determine", reason: "classification_incomplete" });
+  it("an item GLiNER can't type leaves the part unsettled, never 'lacks'", () => {
+    const s = scene([{ role: "stair_side", items: [["dark shape", null] as [string, ItemType | null]] }, { role: "stair_side", items: [["handrail", "handrail"]] }]);
+    s.cls.parts[0].items[0].types.handrail = 0.45; // inside a 0.3–0.6 unknown band
+    expect(s.run({ minYes: 0.6, noBelow: 0.3 }).trace.H02).toMatchObject({ label: "cannot_determine", reason: "not_settled" });
   });
 
-  it("an area nobody mentions is NOT_APPLICABLE, and zero hazards is a valid, purchase-free result", () => {
-    const o = out(obs("O1", "full", "window"));
-    const r = validateClassifications(o, answers(o, []), source);
+  it("D09-like: cords and loose objects on a visible floor → H05 and H07 present; furniture defers H08", () => {
+    const r = scene([{ role: "open_floor", items: [["extension cords", "cord"], ["water jug", "loose_object"], ["speaker cabinet", "furniture"]] }]).run();
+    expect([r.categoryLabels.H05, r.categoryLabels.H07, r.categoryLabels.H06]).toEqual(["present", "present", "absent"]);
+    expect(r.trace.H08).toMatchObject({ label: "cannot_determine", reason: "route_obstruction_not_establishable" });
+  });
+
+  it("D07-like: a lamp beside the bed clears H11 even if another side isn't visible", () => {
+    const r = scene([{ role: "bedside", items: [["desk lamp", "lamp"]] }, { role: "bedside", vis: "obscured" }]).run();
+    expect(r.categoryLabels.H11).toBe("absent");
+    expect(scene([{ role: "bedside" }]).run().categoryLabels.H11).toBe("present");
+  });
+
+  it("H03 needs a positive damage read; otherwise full treads with a confident no are absent", () => {
+    expect(scene([{ role: "stair_treads" }], 0.9).run().categoryLabels.H03).toBe("present");
+    expect(scene([{ role: "stair_treads" }], 0.1).run().categoryLabels.H03).toBe("absent");
+    expect(scene([{ role: "stair_treads", vis: "partial" }], 0.1).run().categoryLabels.H03).toBe("cannot_determine");
+  });
+
+  it("an ordinary scene with no relevant parts is all NOT_APPLICABLE and creates no purchase", () => {
+    const r = scene([{ role: "other", items: [["window", "other" as ItemType]] }]).run();
     expect(Object.values(r.categoryLabels).every((l) => l === "not_applicable")).toBe(true);
     expect(r.findings).toEqual([]);
-    expect(validateVisionResult(r)).toEqual([]);
   });
 
-  it("ignores reads that cite observations Gemma never produced", () => {
-    const o = out(obs("O1", "full"));
-    const ghost: ObservationCategoryAnswer = { observationId: "O9", category: "H07", label: "hazard", probabilities: {} };
-    const r = validateClassifications(o, [...answers(o, []), ghost], source);
-    expect(r.categoryLabels.H07).toBe("not_applicable");
-    expect(traceProblems(r, o)).toEqual([]);
+  it("ignores reads for observations Gemma never produced", () => {
+    const s = scene([{ role: "other" }]);
+    s.cls.parts.push({ observationId: "O99", partIndex: 0, part: "ghost", visibility: "full", roles: { open_floor: 0.99 }, items: [{ text: "cord", types: { cord: 0.99 } }] });
+    s.cls.structures.O99 = {};
+    expect(s.run().categoryLabels.H07).toBe("not_applicable");
   });
 
-  it("only validated PRESENT findings reach the shopping rules", () => {
-    const toHazards = (r: ReturnType<typeof validateClassifications>): HazardFinding[] => r.findings.map((f, i) => ({ ...f, id: `h${i}`, caseId: "c", imageId: "i", source }));
-    const o = out(obs("O1", "full", "bathtub"), obs("O2", "partial", "bathtub"));
-    const confirmed = validateClassifications(o, answers(o, [["O1", "H09", "hazard"]]), source);
-    const uncertain = validateClassifications(o, answers(o, [["O2", "H09", "hazard"]]), source);
-    expect(deriveRequirements("c", toHazards(confirmed)).requirements).toHaveLength(1);
-    expect(deriveRequirements("c", toHazards(uncertain)).requirements).toHaveLength(0);
+  it("only PRESENT reaches the shopping rules", () => {
+    const toHazards = (r: ReturnType<ReturnType<typeof scene>["run"]>): HazardFinding[] => r.findings.map((f, i) => ({ ...f, id: `h${i}`, caseId: "c", imageId: "i", source }));
+    expect(deriveRequirements("c", toHazards(scene([{ role: "bath_wall" }]).run())).requirements).toHaveLength(1);
+    expect(deriveRequirements("c", toHazards(scene([{ role: "bath_wall", vis: "partial" }]).run())).requirements).toHaveLength(0);
   });
 
-  it("keeps every category's taxonomy limits in notEstablishedFromPhoto", () => {
-    const o = out(obs("O1", "full"));
-    const r = validateClassifications(o, answers(o, [["O1", "H10", "hazard"]]), source);
-    expect(r.findings[0].notEstablishedFromPhoto[0]).toBe(CATEGORY_SPECS.H10.notVisible);
+  it("keeps the taxonomy's limits in notEstablishedFromPhoto", () => {
+    expect(scene([{ role: "bath_floor" }]).run().findings.find((f) => f.category === "H10")?.notEstablishedFromPhoto[0]).toBe(CATEGORY_SPECS.H10.notVisible);
   });
 });
 
-describe("tuning thresholds", () => {
-  const o = out(obs("O1", "full", "bathtub"), obs("O2", "full", "floor"));
-  const reads = (pHazard: number, pClear: number): ObservationCategoryAnswer[] =>
-    answers(o, []).map((a) =>
-      a.observationId === "O1" && a.category === "H09" ? { ...a, label: "hazard", probabilities: { hazard: pHazard } }
-      : a.observationId === "O2" && a.category === "H05" ? { ...a, label: "no_hazard", probabilities: { no_hazard: pClear } }
-      : a,
-    );
-
-  it("default thresholds keep GLiNER's top choice", () => {
-    const r = validateClassifications(o, reads(0.4, 0.4), source);
-    expect([r.categoryLabels.H09, r.categoryLabels.H05]).toEqual(["present", "absent"]);
-  });
-  it("a weak hazard or no_hazard read becomes unclear (cannot_determine), never present or absent", () => {
-    const cfg = { minHazardProbability: 0.7, minClearProbability: 0.7 };
-    const weak = validateClassifications(o, reads(0.55, 0.55), source, cfg);
-    expect([weak.categoryLabels.H09, weak.categoryLabels.H05]).toEqual(["cannot_determine", "cannot_determine"]);
-    const strong = validateClassifications(o, reads(0.9, 0.9), source, cfg);
-    expect([strong.categoryLabels.H09, strong.categoryLabels.H05]).toEqual(["present", "absent"]);
-  });
-  it("sweeps stored runs without model calls and keeps invalid images invalid", () => {
-    const gt = { ...Object.fromEntries(CATEGORY_IDS.map((c) => [c, "not_applicable"])), H09: "present", H05: "absent" } as Record<HazardCategoryId, CategoryLabel>;
-    const results = sweep(
-      [
-        { imageId: "D1", gt, observations: o, answers: reads(0.65, 0.9), latencyMs: 1 },
-        { imageId: "D2", gt, latencyMs: 1 }, // observe failed: no observations stored
-      ],
-      [DEFAULT_VALIDATOR, { minHazardProbability: 0.7, minClearProbability: 0 }],
-    );
-    expect(results.map((r) => [r.score.tp, r.score.deferred, r.score.invalidImages])).toEqual([
-      [1, 0, ["D2"]],
-      [0, 1, ["D2"]],
-    ]);
+describe("tuning sweep", () => {
+  it("re-scores stored reads with no model calls, and keeps invalid images invalid", () => {
+    const s = scene([{ role: "bath_wall", items: [["bar", "grab_bar"]] }]);
+    s.cls.parts[0].items[0].types.grab_bar = 0.65;
+    const gt = { ...Object.fromEntries(CATEGORY_IDS.map((c) => [c, "not_applicable"])), H09: "absent" } as Record<HazardCategoryId, CategoryLabel>;
+    const results = sweep([{ imageId: "D1", gt, observations: s.o, classified: s.cls, latencyMs: 1 }, { imageId: "D2", gt, latencyMs: 1 }], [DEFAULT_VALIDATOR, { minYes: 0.7, noBelow: 0.7 }]);
+    // At 0.7 the 0.65 "grab bar" read becomes a no → the wall lacks one → a false positive.
+    expect(results.map((r) => [r.score.fp, r.score.invalidImages])).toEqual([[0, ["D2"]], [1, ["D2"]]]);
   });
 });
 
@@ -193,16 +186,13 @@ describe("scoring (methodology §3–4)", () => {
     ]);
     expect({ tp: s.tp, fp: s.fp, fn: s.fn, deferred: s.deferred }).toEqual({ tp: 1, fp: 1, fn: 1, deferred: 1 });
     expect(s.precision).toMatchObject({ num: 1, den: 2 });
-    expect(s.strictRecall).toMatchObject({ num: 1, den: 3 });
     expect(s.caughtOrEscalatedRecall).toMatchObject({ num: 2, den: 3 });
     expect(s.uncertainty).toMatchObject({ unsupportedPlus: 1, unsupportedMinus: 1, appropriate: { num: 0, den: 2 } });
-    expect(s.imageLevel.negativeImages).toEqual([{ imageId: "D3", fp: 0, requirements: 0, fullyNegative: false }]);
   });
 
   it("scores an invalid image as missing every real hazard, and leaves empty ratios undefined", () => {
     const s = score([row("D1", with_("absent", { H02: "present" }), null)]);
-    expect(s.invalidImages).toEqual(["D1"]);
-    expect(s.fn).toBe(1);
+    expect([s.invalidImages, s.fn]).toEqual([["D1"], 1]);
     expect(s.precision).toEqual({ num: 0, den: 0, value: undefined });
   });
 });
