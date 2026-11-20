@@ -45,4 +45,6 @@ Each decision is short and dated. **Confirmed** means we've decided it. **Open**
 
 ## Verified integrations
 
-None yet. A no-keys smoke test (2026-11-20) confirmed the Nitro build, API auth, workflow start, JSONL recording, the failure path (step-level `guarded`), the Datastar SSE stream and `workflow inspect runs`.
+- **SingleStore** (2026-11-20): `tests/singlestore.smoke.test.ts` passed 10/10 against a shared-tier workspace (SingleStore 10.9.0, TLS `TLS_AES_128_GCM_SHA256`). Migration applied 3 tables. The recorder contract passed, including retries, audit idempotency and history rebuild, and the typed columns matched the bodies.
+
+Earlier, a no-keys smoke test (2026-11-20) confirmed the Nitro build, API auth, workflow start, JSONL recording, the failure path (step-level `guarded`), the Datastar SSE stream and `workflow inspect runs`.

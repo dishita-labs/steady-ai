@@ -54,7 +54,7 @@ export const INTEGRATIONS: Record<IntegrationName, IntegrationInfo> = {
     required: ["SINGLESTORE_HOST", "SINGLESTORE_USER", "SINGLESTORE_PASSWORD"],
     optional: { SINGLESTORE_PORT: "3333", SINGLESTORE_DATABASE: "steady" },
     docs: "https://docs.singlestore.com/cloud/developer-resources/connect-with-application-development-tools/connect-with-node-js/",
-    verified: false,
+    verified: true, // 2026-11-20 smoke test, see docs/decisions.md
   },
   shopping: {
     name: "shopping",

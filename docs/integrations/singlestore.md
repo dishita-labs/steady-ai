@@ -6,7 +6,7 @@ Owner: Dishita (branch `feat/singlestore-firedrill`). Code: `src/lib/recorder/`,
 
 | Check | Status |
 |---|---|
-| Real cluster connection, migration, insert, update and read | **Not verified yet. No credentials are configured on this machine.** The smoke test is ready (below). |
+| Real cluster connection, migration, insert, update and read | **Verified 2026-11-20** on a shared-tier workspace: the smoke test passed 10/10 (SingleStore 10.9.0, TLS). |
 | Contract (create, update, read back every collection, retries, audit, history) | Passes against memory and JSONL (`tests/recorder.test.ts`). The same suite runs against SingleStore in the smoke test. |
 | SQL shape, TLS defaults, error classification | Unit-tested with a fake pool (`tests/recorder.test.ts`), so no network. |
 
