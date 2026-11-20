@@ -305,3 +305,4 @@ export const CHECKLISTS: Record<ProductType, ProductChecklist> = {
 export const PRODUCT_TYPES = Object.keys(CHECKLISTS) as ProductType[];
 
 export const questionsOf = (it: ChecklistItem): string[] => (Array.isArray(it.question) ? it.question : [it.question]);
+

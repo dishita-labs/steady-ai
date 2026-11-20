@@ -8,10 +8,10 @@
  * shows what reading the whole page (reviews, Q&A, other products) adds or breaks.
  */
 
-import { questionsOf, type ProductChecklist } from "./checklist";
+import { questionsOf, type ProductChecklist } from "../../src/lib/product-fitness/checklist";
 import { productPageCheck, readText, type CollectedPage, type ReadSource, type SearchRecord } from "./collect";
 import { maxYes, type DecideRun } from "./decide";
-import { parseQuantity } from "./extract";
+import { parseQuantity } from "../../src/lib/product-fitness/extract";
 import { silverLabel, type GoldFile, type Label } from "./labels";
 import { DEFAULT_RANK, rankPage, sortRankings, type ItemInput, type PageRanking, type RankConfig } from "./rank";
 import { itemConfusion, rankingAgreement, rate, type Confusion, type RankingAgreement } from "./score";

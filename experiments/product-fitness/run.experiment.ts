@@ -15,7 +15,7 @@ import { expect, it } from "vitest";
 import { missingEnv } from "../../src/lib/config";
 import { installRecorder } from "../hazard-classification/record";
 import { analyze, renderProduct, type StoredProductRun } from "./analyze";
-import { CHECKLISTS, PRODUCT_TYPES, type ProductType } from "./checklist";
+import { CHECKLISTS, PRODUCT_TYPES, type ProductType } from "../../src/lib/product-fitness/checklist";
 import { collect, productPageCheck } from "./collect";
 import { decidePages } from "./decide";
 import { loadGold } from "./labels";

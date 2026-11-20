@@ -10,7 +10,7 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { ProductType } from "./checklist";
+import type { ProductType } from "../../src/lib/product-fitness/checklist";
 
 export type Label = "yes" | "no";
 

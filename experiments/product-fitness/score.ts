@@ -4,7 +4,7 @@
  * Every rate is reported with its denominator; a zero denominator is "undefined".
  */
 
-import type { ProductChecklist } from "./checklist";
+import type { ProductChecklist } from "../../src/lib/product-fitness/checklist";
 import type { Label } from "./labels";
 import { sortRankings, type Outcome, type PageRanking } from "./rank";
 

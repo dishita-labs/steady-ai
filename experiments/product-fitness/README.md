@@ -6,6 +6,8 @@ The question this experiment answers: can GLiNER read product pages well enough 
 
 It uses `getProductSearchProvider()` (Exa) and SIE `extract` as production does. The only production change is an optional, backward-compatible `extract: { query, schema }` on the Exa provider, which maps to Exa's `contents.summary`, plus a raw `summary` on `RetrievedPage`. It needs no SingleStore, Workflow SDK or Hono.
 
+The checklist, seller-sheet verification, shop list, page check, number parser and GLiNER reader live in `src/lib/product-fitness/`, shared with the workflow, so a change measured here is the change production runs. This folder holds only the evaluation: collection with caching, the comparison modes, labels, scoring and the report.
+
 ## Run
 
 ```bash
@@ -29,16 +31,16 @@ Output in `.data/experiments/product-fitness/<run>/` (git-ignored):
 
 ## Pipeline
 
-1. **Collect** (`collect.ts`, `shops.ts`).
+1. **Collect** (`collect.ts`, `src/lib/product-fitness/shops.ts`).
    - Three Exa queries per product. The first is the production rule's own `searchQuery`, which a test enforces.
    - Each query is restricted with `includeDomains` to that product's **US shops**: Amazon, Home Depot, Lowe's, Walmart, Target, plus per product CVS, Walgreens, Best Buy, Vitality Medical, Vive, Moen and HealthCraft.
    - Each search also asks Exa for a **structured product sheet** per result (`contents.summary` with `SHEET_SCHEMA`): page type, product name, the seller's description sentences and spec rows, copied word for word, never reviews or Q&A.
-2. **Verify the sheet** (`sheet.ts`). Exa's summary is written by a model, so every description sentence, spec value and the product name are kept **only if they appear verbatim in the page text** (case, whitespace and quote marks normalized). Unverified quotes are dropped and listed in the report. A name that isn't on the page falls back to the page title.
-3. **Single-product pages only** (`productPageCheck`). A page is kept only if Exa says `single_product` and the URL matches the shop's product-URL pattern where one is known: `/p/…/<id>` at Home Depot, `/pd/` at Lowe's, `/dp/` at Amazon, and so on. This drops category pages and catalog PDFs before anything is read.
-4. **Read** (`decide.ts`).
+2. **Verify the sheet** (`src/lib/product-fitness/sheet.ts`). Exa's summary is written by a model, so every description sentence, spec value and the product name are kept **only if they appear verbatim in the page text** (case, whitespace and quote marks normalized). Unverified quotes are dropped and listed in the report. A name that isn't on the page falls back to the page title.
+3. **Single-product pages only** (`productPageCheck`, `src/lib/product-fitness/page.ts`). A page is kept only if Exa says `single_product` and the URL matches the shop's product-URL pattern where one is known: `/p/…/<id>` at Home Depot, `/pd/` at Lowe's, `/dp/` at Amazon, and so on. This drops category pages and catalog PDFs before anything is read.
+4. **Read** (`decide.ts` over the shared reader `src/lib/product-fitness/read.ts`).
    - GLiNER reads **the verified sheet**. Each checklist item is one positive, single-concept yes/no question, or several such questions meaning "any of". "X or Y" in one question reads poorly. A test enforces that no question contains negation.
    - For comparison, GLiNER also reads the **whole page** (the old way), and the report shows every product whose outcome changes.
-5. **Check numbers** (`extract.ts`).
+5. **Check numbers** (`src/lib/product-fitness/extract.ts`).
    - GLiNER decides that a value is stated, and code parses it: `1-1/4"`, `32 mm`, `150 kg`, and spec rows that carry the unit in the name, like `Weight Capacity (lb.): 500`.
    - Another part's dimension doesn't count, e.g. `Escutcheon Diameter (in.)` is the flange cover, not the bar.
    - In sheet mode the parser reads the whole sheet, which is seller text only. In page mode it reads only the chunks GLiNER flagged, because of reviews.
@@ -53,7 +55,7 @@ Output in `.data/experiments/product-fitness/<run>/` (git-ignored):
    - Gold and silver are never combined. The same `rankPage` runs on the reference labels.
    - The dangerous error, "eligible" where the reference says "reject", is counted separately. Top-3 is compared with Exa's order.
 
-## Checklist (`checklist.ts`)
+## Checklist (`src/lib/product-fitness/checklist.ts`)
 
 Sources were found with Exa on 2026-11-20. Each item carries its source URL and the sentence it rests on.
 

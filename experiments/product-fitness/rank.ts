@@ -14,8 +14,8 @@
  * met, then Exa's own rank.
  */
 
-import type { ChecklistItem, ProductChecklist } from "./checklist";
-import { checkNumeric, type NumericOutcome } from "./extract";
+import type { ChecklistItem, ProductChecklist } from "../../src/lib/product-fitness/checklist";
+import { checkNumeric, type NumericOutcome } from "../../src/lib/product-fitness/extract";
 
 export type ItemStatus = "met" | "not_met" | "failed_value" | "red_flag" | "unknown_read";
 export type Outcome = "eligible" | "needs_verification" | "reject";

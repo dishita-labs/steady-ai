@@ -9,9 +9,12 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getProductSearchProvider, type ProductSearchQuery, type RetrievedPage } from "../../src/lib/product-search";
-import type { ProductChecklist, ProductType } from "./checklist";
-import { SHEET_QUERY, SHEET_SCHEMA, parseSheet, sheetText, verifySheet, type VerifiedSheet } from "./sheet";
-import { isProductUrl, SHOPS_FOR } from "./shops";
+import type { ProductChecklist, ProductType } from "../../src/lib/product-fitness/checklist";
+import { productPageCheck, stripMarkup } from "../../src/lib/product-fitness/page";
+import { SHEET_QUERY, SHEET_SCHEMA, parseSheet, sheetText, verifySheet, type VerifiedSheet } from "../../src/lib/product-fitness/sheet";
+import { SHOPS_FOR } from "../../src/lib/product-fitness/shops";
+
+export { productPageCheck, stripMarkup };
 
 export interface CollectedPage extends RetrievedPage {
   productType: ProductType;
@@ -70,32 +73,6 @@ export async function collect(checklist: ProductChecklist, cacheDir: string, num
     });
   }
   return { pages: [...byUrl.values()], searches };
-}
-
-/**
- * Is this a single-product page? Decided before any GLiNER question, from Exa's page type and,
- * where the shop's URL shape is known, the URL. (GLiNER can't do it: "Is this text a shop
- * listing for a single product?" scored 0.84 on a listicle; see README.)
- */
-export function productPageCheck(p: Pick<CollectedPage, "url" | "sheet">): { ok: true } | { ok: false; reason: string } {
-  if (!p.sheet) return { ok: false, reason: "no product sheet from Exa" };
-  if (p.sheet.pageType !== "single_product") return { ok: false, reason: `Exa page type: ${p.sheet.pageType}` };
-  if (isProductUrl(p.url) === false) return { ok: false, reason: "not a product URL for this shop" };
-  return { ok: true };
-}
-
-/**
- * Page markup Exa sometimes returns inside the text: fenced code blocks (JSON-LD breadcrumbs,
- * product schema). Not product prose, and dense enough in tokens to overflow Decide's 512-token
- * window (seen 2026-11-20 on a schema.org breadcrumb).
- */
-export function stripMarkup(text: string): string {
-  return text
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/\{[^{}]*"@(?:context|type)"[\s\S]*?\}\s*(?=\n|$)/g, " ")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
 }
 
 /** The whole page as GLiNER would read it without a sheet: title, then text without markup. */

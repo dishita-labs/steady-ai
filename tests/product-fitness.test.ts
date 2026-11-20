@@ -5,8 +5,8 @@
 
 import { describe, expect, it } from "vitest";
 import { REQUIREMENT_RULES } from "../src/lib/rules/requirements";
-import { CHECKLISTS, PRODUCT_TYPES, questionsOf } from "../experiments/product-fitness/checklist";
-import { checkNumeric, parseInches, parseQuantity } from "../experiments/product-fitness/extract";
+import { CHECKLISTS, PRODUCT_TYPES, questionsOf } from "../src/lib/product-fitness/checklist";
+import { checkNumeric, parseInches, parseQuantity } from "../src/lib/product-fitness/extract";
 import { SILVER, silverLabel } from "../experiments/product-fitness/labels";
 import { rankPage, sortRankings, type ItemInput } from "../experiments/product-fitness/rank";
 import { rankingAgreement } from "../experiments/product-fitness/score";
@@ -145,13 +145,13 @@ describe("product pages, shops and sheets", () => {
   });
 
   it("restricts every product to shops it can match, and starts with the big-box stores", async () => {
-    const { SHOPS, SHOPS_FOR } = await import("../experiments/product-fitness/shops");
+    const { SHOPS, SHOPS_FOR } = await import("../src/lib/product-fitness/shops");
     for (const t of PRODUCT_TYPES) for (const d of SHOPS_FOR[t]) expect(SHOPS[d], d).toBeDefined();
     expect(SHOPS_FOR.grab_bar).toContain("homedepot.com");
   });
 
   it("keeps only quotes that are verbatim on the page, and the page title when the name isn't", async () => {
-    const { verifySheet, sheetText, parseSheet } = await import("../experiments/product-fitness/sheet");
+    const { verifySheet, sheetText, parseSheet } = await import("../src/lib/product-fitness/sheet");
     const page = "Moen Home Care 24 in. Grab Bar\nSupports up to 500 lbs when installed properly.\nBar Diameter (in.) 1.25\nReviews: super easy to install, love it";
     const parsed = parseSheet(JSON.stringify({ pageType: "single_product", productName: "Moen Deluxe Grab Bar", sellerDescription: ["Supports up to 500 lbs  when installed properly.", "Holds 1,000 lbs."], specifications: [{ name: "Bar Diameter (in.)", value: "1.25" }] }))!;
     const v = verifySheet(parsed, page, "Moen Home Care 24 in. Grab Bar");
