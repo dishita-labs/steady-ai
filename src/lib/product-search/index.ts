@@ -1,8 +1,12 @@
 /**
  * Product research boundary (Exa, `exa-js`).
  *
- *   exa.search(query, { numResults, includeDomains, contents: { text, highlights } })
+ *   exa.search(query, { numResults, includeDomains, contents: { text, highlights, summary? } })
  *   exa.getContents(urls, { text, highlights })
+ *
+ * `extract` asks Exa for a structured summary of each result (`contents.summary` with a JSON
+ * schema), returned raw in `RetrievedPage.summary`. The summary is model-written: callers must
+ * check anything they rely on against the page text before treating it as evidence.
  *
  * Rules: keep every source URL; never fill in a price, spec or seller that isn't in retrieved content.
  * Prices and availability are stale until verified at the retailer.
@@ -17,6 +21,8 @@ export interface ProductSearchQuery {
   query: string;
   numResults?: number;
   includeDomains?: string[];
+  /** Structured extraction per result (Exa `contents.summary`). */
+  extract?: { query: string; schema: Record<string, unknown> };
 }
 
 export interface RetrievedPage {
@@ -25,6 +31,8 @@ export interface RetrievedPage {
   /** Verbatim page text, when requested. */
   text?: string;
   highlights?: string[];
+  /** Raw Exa summary (JSON text when `extract.schema` was given). Model-written; verify before use. */
+  summary?: string;
   publishedDate?: string;
   providerResultId?: string;
   /** Exa request ID, for tracing. */
@@ -55,6 +63,7 @@ type ExaResult = {
   publishedDate?: string;
   text?: string;
   highlights?: string[];
+  summary?: string;
 };
 
 function toPage(r: ExaResult, requestId: string, retrievedAt: string): RetrievedPage {
@@ -63,6 +72,7 @@ function toPage(r: ExaResult, requestId: string, retrievedAt: string): Retrieved
     title: r.title ?? undefined,
     text: r.text,
     highlights: r.highlights,
+    summary: r.summary,
     publishedDate: r.publishedDate,
     providerResultId: r.id,
     requestId,
@@ -72,8 +82,8 @@ function toPage(r: ExaResult, requestId: string, retrievedAt: string): Retrieved
 
 export function getProductSearchProvider(): ProductSearchProvider {
   return {
-    async search({ query, numResults = 5, includeDomains }) {
-      const res = await client().search(query, { numResults, includeDomains, contents });
+    async search({ query, numResults = 5, includeDomains, extract }) {
+      const res = await client().search(query, { numResults, includeDomains, contents: extract ? { ...contents, summary: extract } : contents });
       const at = new Date().toISOString();
       return res.results.map((r) => toPage(r, res.requestId, at));
     },
