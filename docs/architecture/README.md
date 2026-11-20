@@ -3,14 +3,14 @@
 Steady turns one room photo into an approved, evidence-backed shopping action. A Workflow SDK run drives each case. Steps do all the I/O and record everything to the recorder (SingleStore or JSONL), and pure TypeScript rules make every decision.
 
 ```text
- POST /api/cases (photo) ─▶ start(steadyCase)
+ POST /cases (photo) ─▶ start(steadyCase)
                                  │
   recordCase ─▶ analyzePhoto ──────────▶ Gemma 4 31B (SIE chatCompletions, strict JSON schema)
                     │                     └─ validateVisionResult: contract violations stop the run
                     ▼
   defineRequirements ── rules/requirements.ts (deterministic hazard → requirement table)
                     │
-                    ├─ open questions? ─▶ contextHook ◀── POST /api/cases/:id/context
+                    ├─ open questions? ─▶ contextHook ◀── POST /cases/:id/context
                     ▼
   researchProducts (per requirement) ──▶ Exa search + page text ─▶ ProductCandidate + ProductEvidence
                     ▼
@@ -20,7 +20,7 @@ Steady turns one room photo into an approved, evidence-backed shopping action. A
                     ▼
   preparePurchase ── simulated adapter ─▶ ShoppingAction (awaiting_approval)
                     ▼
-  approvalHook ◀── POST /api/cases/:id/actions/:actionId/approval
+  approvalHook ◀── POST /cases/:id/actions/:actionId/approval
                     ▼
   recordApprovalDecision ── approve() + executeApproved() ─▶ executed (simulated) or declined
 
@@ -33,11 +33,11 @@ Steady turns one room photo into an approved, evidence-backed shopping action. A
 - `src/workflows/steady-case.ts` is the only `"use workflow"` function. It runs in a deterministic sandbox and is replayed from the event log, so it does no I/O. It calls steps, awaits hooks, and returns a small result.
 - `src/workflows/steps.ts` holds the `"use step"` functions. Steps are retried on unhandled errors. Missing configuration (`IntegrationUnavailableError`) and broken model output are fatal, because retrying won't fix them.
 - **Idempotency.** Everything a step writes gets an ID derived from what it is (`stableId`), so a retried step upserts the same rows.
-- **Hooks.** `contextHook` and `approvalHook` (`src/workflows/hooks.ts`) have deterministic tokens built from case and action IDs. The tokens are not credentials, so every `/api` route requires `STEADY_API_TOKEN`.
+- **Hooks.** `contextHook` and `approvalHook` (`src/workflows/hooks.ts`) have deterministic tokens built from case and action IDs. The tokens are not credentials, and the app has no auth of its own: it sits behind an auth proxy (decision 13).
 - **Monitoring.** Run `aube run workflow:web` to see runs, steps, retries, hooks and stream output. Locally the run state lives in `.workflow-data/`. The script points the UI at Nitro's manifest (`node_modules/.nitro/workflow/manifest.json`, written by `dev` or `build`) via `WORKFLOW_MANIFEST_PATH`; the UI only looks for Next.js paths by default.
 - **Keep the workflow body free of `try`.** The compiler builds the UI's workflow graph from the `"use workflow"` body and skips `try` blocks. Failure handling lives in each step (`guarded` in `steps.ts`).
 - **Secrets.** `dev`, `start` and `db:migrate` run under `fnox exec`, which loads `SIE_API_KEY` and `EXA_API_KEY` (and anything else added to `fnox.toml`) from the keychain.
-- **Datastar.** `GET /api/runs/:runId/stream` reads the run's progress stream and sends each event as a `datastar-patch-signals` SSE event. It's a stub for the future web app.
+- **Datastar.** The browser has no JSON API. The page (`src/ui/view.ts`, rendered on the server) posts forms with Datastar. `GET /cases/:caseId/stream` re-renders `#app` and sends it as a `datastar-patch-elements` SSE event after every progress event the run writes, and once more when the run ends.
 
 ## Case state (`src/lib/case/state.ts`)
 
@@ -73,7 +73,7 @@ Steady turns one room photo into an approved, evidence-backed shopping action. A
 | Nothing executes without explicit approval from the adapter that prepared it | `approvalHook` → `approve` → `executeApproved` |
 | Simulated actions are labeled | `ShoppingAction.simulated` |
 | The audit log has no secrets and no hidden reasoning | `createAuditEvent` |
-| Photos need explicit consent; uploads stay on local disk, never at a public URL | `POST /api/cases` |
+| Photos need explicit consent; uploads stay on local disk (served back only at `/cases/:id/photo`, public by decision, behind the auth proxy) | `POST /cases` |
 
 ## Hazard taxonomy
 

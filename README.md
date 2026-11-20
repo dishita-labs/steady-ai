@@ -17,7 +17,7 @@ Built for the Personal Agents Hackathon (2026-11-20).
 
 ## Status
 
-The scaffolding works end to end with no API keys: a case is recorded, the run stops cleanly at photo analysis, and the failure is recorded. **No external integration has been verified with a real call yet.** The vision prompt, requirement rules and Decide concern policy are drafts for us to evaluate. There is no web app yet. See [`docs/decisions.md`](docs/decisions.md).
+The scaffolding works end to end with no API keys: a case is recorded, the run stops cleanly at photo analysis, and the failure is recorded. **No external integration has been verified with a real call yet.** The vision prompt, requirement rules and Decide concern policy are drafts for us to evaluate. The web UI is at `/` (run `aubr dev`). **The app has no auth of its own; it expects to sit behind an auth proxy (see decision 13), so don't expose it directly.** See [`docs/decisions.md`](docs/decisions.md).
 
 ## Getting started
 
@@ -26,7 +26,7 @@ Uses [aube](https://aube.sh) (`mise install` provides it) and Node ≥ 22.12.
 ```bash
 aube install
 fnox check --all            # SIE_API_KEY and EXA_API_KEY come from fnox (keychain)
-cp .env.example .env        # non-secret settings; put STEADY_API_TOKEN in fnox or .env
+cp .env.example .env        # non-secret settings
 aubr dev                    # Nitro dev server on http://localhost:3000 (loads fnox secrets)
 aubr workflow:web           # Workflow SDK UI: runs, steps, hooks, streams (run dev or build first)
 aubr check                  # lint + typecheck + tests
@@ -34,30 +34,14 @@ aubr build                  # production build in .output/
 aubr db:migrate             # apply the SingleStore schema (needs SINGLESTORE_*)
 ```
 
-Start a case and drive it from the command line:
-
-```bash
-curl -H "Authorization: Bearer $STEADY_API_TOKEN" \
-  -F photo=@bathroom.jpg -F room=bathroom -F consent=true \
-  http://localhost:3000/api/cases
-# → { "caseId": "...", "runId": "..." }
-
-curl -H "Authorization: Bearer $STEADY_API_TOKEN" http://localhost:3000/api/cases/<caseId>
-curl -N -H "Authorization: Bearer $STEADY_API_TOKEN" http://localhost:3000/api/runs/<runId>/stream   # Datastar SSE
-
-# When the run waits on a hook (the Workflow UI shows it):
-curl -H "Authorization: Bearer $STEADY_API_TOKEN" --json '{"answeredBy":"me","answers":[{"questionId":"q_...","answer":"tile"}]}' \
-  http://localhost:3000/api/cases/<caseId>/context
-curl -H "Authorization: Bearer $STEADY_API_TOKEN" --json '{"approved":true,"approvedBy":"me"}' \
-  http://localhost:3000/api/cases/<caseId>/actions/<actionId>/approval
-```
+Open http://localhost:3000, upload a photo with your concern, and follow the case on the page. The page is the only interface: it posts forms with [Datastar](https://data-star.dev), and the server answers with SSE events that patch the HTML. Runs are inspected with `aubr workflow:web`.
 
 ## Layout
 
 ```text
 nitro.config.ts             Nitro + workflow/nitro module; all routes → src/server.ts
 src/
-  server.ts                 Hono API: start case, read case, answer context, approve, Datastar SSE stub
+  server.ts                 Hono routes for the Datastar web app: new case, case page + stream, context answers, approval
   workflows/
     steady-case.ts          "use workflow": the orchestration only
     steps.ts                "use step": every I/O operation, with recording and audit
